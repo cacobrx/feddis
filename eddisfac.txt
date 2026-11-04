@@ -1,0 +1,63 @@
+Eddisfac / sbfac
+Consideraciones generales
+Tener un registro de auditoría con todas las tareas que se realizan
+Usar una base de datos mysql
+Usar opcion de claro y oscuro para la interface
+Login
+Hacer el login con documento y clave eddis. Si no tiene documento en el sistema eddis, loguearse con los datos de studio beauty
+Al acceder con ese documento, tiene acceso a los distintos centros de eddis y sb directamente
+El usuario tiene que estar autorizado a poner facturar
+
+Esto lo hace por medio de una api para obtener la validación del usuario
+Acceso al sistema
+En la parte superior, tengo que ver:
+Logo de Eddis o Studio Beauty
+icono almohadilla para contraer o expandir el menú
+icono nueva pestaña para abrir el sistema en una nueva pestaña con el dashboard
+combo selector de sede Eddis y Studio Beauty, según lo que pueda acceder el usuario
+Información de la renovación del Certificado Digital
+icono claro oscuro
+usuario logueado con menú de Configuración y Logout
+Menú
+Dashboard
+Administración
+Pagos
+Comprobantes Fiscales
+CUIT
+Consulta ARCA
+Datos de Terceros
+Utilidades
+Usuarios
+Configuración
+Auditoría
+
+Dashboard
+Mostramos información del año seleccionado
+Facturación por mes por centro dentro del año seleccionado 
+Total por mes del año seleccionado
+Vencimiento de certificado por centro
+Administración
+Pagos
+Mostramos los pagos en el rango de fecha por el centro seleccionado. Poder filtrar desde nro de cuota, pagos de central o propios, 
+Desde este módulo podemos seleccionar en el checkbox correspondiente, los pagos para pasarlos a facturas, indicando el importe que vamos sumando para no pasarnos del total autorizado. 
+Para obtener los pagos vamos a usar una api al sistema de gestion eddis
+Comprobantes Fiscales
+Son los comprobantes que se generan a partir de los pagos del módulo anterior. Inicialmente estos registros no van a estar autorizados por arca. Poder seleccionar los registró con su checkbox correspondiente para autorizar en ARCA usando la api correspondiente
+CUIT
+Si estoy logueado como staff, tendría que ser un crud de datos de cuit (razón social, nombre fantasía, domicilio, ciudad, condición iva, centro, alícuota, punto de venta, fecha inicio de actividades, vencimiento certificado ARCA, Tope facturación, Importar cuota 99, Modo Prueba)
+
+Si estoy logueado como no staff, veo para actualizar: Nombre Fantasía, Razón Social, domicilio, ciudad, cuit, condición IVA, Alicuota, punto de venta, inicio actividades, vencimiento certificado, tope facturación, Modo prueba
+Consulta ARCA
+Permite consultar los comprobantes en ARCA, ingresando Tipo de Comprobante según la condición de iva: monotributo y exento → Factura C / Nota de Crédito C), Responsable Inscripto → Factura A / Factura B / Nota de Crédito A / Nota de Crédito B
+Datos Terceros
+Permite indicar que cuando un alumno necesita hacer una factura  a una empresa, se completan los datos de Documento, Razón Social, Dirección, Ciudad, Cuit, Condición IVA. De esa forma, cuando se factura a un alumno ingresado aquí, se lo hace a la empresa indicada
+Utilidades
+A este módulo solo se accede si es usuario staff
+Usuarios
+Acá vemos los usuarios para usar el sistema
+Se agregar a partir de una api donde obtiene los usuarios para mostrar en un combo, donde trae el nombre, apellido, documento y se le asigna los centros que factura
+Configuración
+Acá se configura las api de pagos Eddis y facturación ARCA
+Auditoría
+Muestra los datos de auditorías con cada una de las acciones en el sistema
+

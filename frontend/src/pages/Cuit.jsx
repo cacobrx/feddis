@@ -1,0 +1,161 @@
+import { useState } from 'react'
+import { Plus, Pencil, Trash2, RotateCcw } from 'lucide-react'
+import { useSession } from '../context/Session'
+import { api } from '../lib/api'
+import { Alert, Button, Confirm, Empty, Field, Loading, Modal, PageHead, Switch, useAction, useApi, useForm } from '../components/ui'
+import { CONDICION_IVA, diasHasta, fmtCuit, fmtDate, fmtMoney, MARCA } from '../lib/format'
+
+const VACIO = {
+  centro_id: '', cuit: '', razon_social: '', nombre_fantasia: '', domicilio: '', ciudad: '', condicion_iva: 'MONOTRIBUTO',
+  ingresos_brutos: '', alicuota: '0', punto_venta: '', inicio_actividades: '', venc_certificado: '', tope_facturacion: '', modo_prueba: true, arca_simulado: true, importar_cuota_99: false,
+}
+
+export default function Cuit() {
+  const { esStaff, refresh } = useSession()
+  const { data, loading, error, reload } = useApi('/cuits')
+  const [edit, setEdit] = useState(null)
+  const [borrar, setBorrar] = useState(null)
+  const [run] = useAction()
+
+  const done = () => { reload(); refresh() }
+
+  return (
+    <div className="page">
+      <PageHead title="CUIT" actions={esStaff && <Button variant="primary" onClick={() => setEdit({ ...VACIO })}><Plus size={16} /> Agregar CUIT</Button>}>
+        {esStaff ? 'Datos fiscales de cada centro. Cada centro tiene un CUIT activo.' : 'Datos fiscales de tus centros. Mantenelos al día: se usan en cada comprobante.'}
+      </PageHead>
+      {error && <Alert kind="bad">{error}</Alert>}
+      <section className="panel">
+        {loading && !data ? <Loading /> : !data?.length ? <Empty title="Todavía no hay CUIT cargados">{esStaff ? 'Agregá el primero para poder facturar.' : 'Pedí a un usuario staff que cargue el CUIT de tu centro.'}</Empty> : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  {esStaff && <th>Centro</th>}
+                  <th>Razón social</th><th>CUIT</th><th>Condición IVA</th><th className="num">Pto. venta</th>
+                  <th className="num">Tope mensual</th><th>Certificado</th><th>Autorización ARCA</th>
+                  {esStaff && <th>Cuota 99</th>}
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((c) => {
+                  const dias = diasHasta(c.venc_certificado)
+                  return (
+                    <tr key={c.id} className={c.activo ? '' : 'is-disabled'}>
+                      {esStaff && <td>{c.centro_nombre}<div className="small muted">{MARCA[c.centro_marca]}</div></td>}
+                      <td>{c.razon_social}<div className="small muted">{c.nombre_fantasia}</div></td>
+                      <td className="nowrap">{fmtCuit(c.cuit)}</td>
+                      <td>{CONDICION_IVA[c.condicion_iva]}{c.condicion_iva === 'RI' && <div className="small muted">IVA {c.alicuota}%</div>}</td>
+                      <td className="num">{c.punto_venta}</td>
+                      <td className="num">{fmtMoney(c.tope_facturacion)}</td>
+                      <td className="nowrap">{fmtDate(c.venc_certificado)}{dias !== null && dias <= 30 && <div className="small" style={{ color: dias < 0 ? 'var(--bad)' : 'var(--warn)' }}>{dias < 0 ? 'Vencido' : `Vence en ${dias} d`}</div>}</td>
+                      <td>{!c.activo ? <span className="badge">Inactivo</span> : (
+                        <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+                          {c.arca_simulado ? <span className="badge badge-warn">Simulada</span> : <span className="badge badge-ok">Real</span>}
+                          {!c.arca_simulado && (c.modo_prueba ? <span className="badge">Homologación</span> : <span className="badge badge-accent">Producción</span>)}
+                        </span>
+                      )}</td>
+                      {esStaff && <td>{c.importar_cuota_99 ? 'Importa' : <span className="muted">No</span>}</td>}
+                      <td className="nowrap" style={{ textAlign: 'right' }}>
+                        <button className="icon-btn" onClick={() => setEdit({ ...VACIO, ...c, alicuota: String(c.alicuota), tope_facturacion: String(c.tope_facturacion), inicio_actividades: c.inicio_actividades ?? '', venc_certificado: c.venc_certificado ?? '', ingresos_brutos: c.ingresos_brutos ?? '' })} aria-label="Editar" title="Editar"><Pencil size={16} /></button>
+                        {esStaff && (c.activo
+                          ? <button className="icon-btn" onClick={() => setBorrar(c)} aria-label="Dar de baja" title="Dar de baja"><Trash2 size={16} /></button>
+                          : <button className="icon-btn" onClick={async () => { if (await run(() => api.post(`/cuits/${c.id}/reactivar`), 'CUIT reactivado.')) done() }} aria-label="Reactivar" title="Reactivar"><RotateCcw size={16} /></button>)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {edit && <CuitForm inicial={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); done() }} />}
+      {borrar && (
+        <Confirm title="Dar de baja el CUIT" danger confirmLabel="Dar de baja" onClose={() => setBorrar(null)}
+          onConfirm={async () => { if (await run(() => api.del(`/cuits/${borrar.id}`), (r) => r.desactivado ? 'El CUIT tiene comprobantes: quedó inactivo.' : 'CUIT eliminado.')) done() }}
+          message={`${borrar.razon_social} (${fmtCuit(borrar.cuit)}). Si tiene comprobantes emitidos se desactiva en lugar de borrarse, para conservar la trazabilidad.`} />
+      )}
+    </div>
+  )
+}
+
+function CuitForm({ inicial, onClose, onSaved }) {
+  const { esStaff, centros } = useSession()
+  const { values: v, set, errors, fail } = useForm(inicial)
+  const [run, busy] = useAction()
+  const nuevo = !inicial.id
+
+  const save = async (e) => {
+    e.preventDefault()
+    const payload = { ...v, cuit: String(v.cuit).replace(/\D/g, '') }
+    const ok = await run(() => (nuevo ? api.post('/cuits', payload) : api.put(`/cuits/${v.id}`, payload)),
+      nuevo ? 'CUIT agregado.' : 'Cambios guardados.', fail)
+    if (ok) onSaved()
+  }
+
+  const f = (k, label, props = {}) => (
+    <Field label={label} error={errors[k]} htmlFor={`cu-${k}`} className={props.span ? 'span-2' : ''}>
+      <input id={`cu-${k}`} className="input" value={v[k] ?? ''} onChange={set(k)} aria-invalid={!!errors[k]} {...props} span={undefined} />
+    </Field>
+  )
+
+  return (
+    <Modal wide title={nuevo ? 'Agregar CUIT' : `Editar ${inicial.razon_social}`} onClose={onClose} footer={<>
+      <Button onClick={onClose}>Cancelar</Button>
+      <Button variant="primary" type="submit" form="cuit-form" loading={busy}>{nuevo ? 'Agregar CUIT' : 'Guardar cambios'}</Button>
+    </>}>
+      <form id="cuit-form" onSubmit={save} className="grid-form">
+        {esStaff && (
+          <Field label="Centro" error={errors.centro_id} htmlFor="cu-centro">
+            <select id="cu-centro" className="select" value={v.centro_id} onChange={set('centro_id')} required>
+              <option value="">Elegí un centro</option>
+              {centros.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select>
+          </Field>
+        )}
+        {f('razon_social', 'Razón social', { required: true, span: true })}
+        {f('nombre_fantasia', 'Nombre fantasía')}
+        {f('cuit', 'CUIT', { required: true, inputMode: 'numeric', placeholder: '30-12345678-9' })}
+        {f('domicilio', 'Domicilio')}
+        {f('ciudad', 'Ciudad')}
+        <Field label="Condición IVA" error={errors.condicion_iva} htmlFor="cu-iva">
+          <select id="cu-iva" className="select" value={v.condicion_iva} onChange={set('condicion_iva')}>
+            <option value="RI">Responsable Inscripto</option>
+            <option value="MONOTRIBUTO">Monotributo</option>
+            <option value="EXENTO">Exento</option>
+          </select>
+        </Field>
+        <Field label="Alícuota IVA (%)" error={errors.alicuota} hint={v.condicion_iva === 'RI' ? 'Se aplica a toda la factura.' : 'Solo para Responsable Inscripto.'} htmlFor="cu-alicuota">
+          <input id="cu-alicuota" className="input" type="number" step="0.01" min="0" max="100" value={v.alicuota} onChange={set('alicuota')} disabled={v.condicion_iva !== 'RI'} />
+        </Field>
+        {f('ingresos_brutos', 'Ingresos Brutos (n.º)', { placeholder: 'Se imprime en el comprobante' })}
+        {f('punto_venta', 'Punto de venta', { type: 'number', min: 1, required: true })}
+        {f('inicio_actividades', 'Inicio de actividades', { type: 'date' })}
+        {f('venc_certificado', 'Vencimiento del certificado ARCA', { type: 'date' })}
+        <Field label="Tope de facturación mensual ($)" error={errors.tope_facturacion} htmlFor="cu-tope">
+          <input id="cu-tope" className="input" type="number" step="0.01" min="0" value={v.tope_facturacion} onChange={set('tope_facturacion')} required />
+        </Field>
+        <div className="span-2" style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 4 }}>
+          <fieldset style={{ border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '10px 14px 12px', margin: 0 }}>
+            <legend className="small" style={{ fontWeight: 500, color: 'var(--ink-2)', padding: '0 4px' }}>Autorización en ARCA</legend>
+            <div style={{ display: 'grid', gap: 8 }} role="radiogroup">
+              <label className="check"><input type="radio" name="arca-modo" checked={!!v.arca_simulado} onChange={() => set('arca_simulado')(true)} />
+                <span><strong style={{ fontWeight: 600 }}>Simulada</strong> <span className="muted small">— no contacta ARCA: inventa número de comprobante, CAE y vencimiento del CAE. Sin validez fiscal.</span></span></label>
+              <label className="check"><input type="radio" name="arca-modo" checked={!v.arca_simulado} onChange={() => set('arca_simulado')(false)} />
+                <span><strong style={{ fontWeight: 600 }}>Real</strong> <span className="muted small">— envía el comprobante a la API de ARCA.</span></span></label>
+            </div>
+            {!v.arca_simulado && (
+              <div style={{ marginTop: 10, paddingLeft: 24 }}>
+                <Switch checked={v.modo_prueba} onChange={set('modo_prueba')} label="Homologación: autorizar en el entorno de prueba de ARCA, sin validez fiscal" />
+              </div>
+            )}
+          </fieldset>
+          {esStaff && <Switch checked={v.importar_cuota_99} onChange={set('importar_cuota_99')} label="Importar cuota 99 (derecho de examen) en Pagos" />}
+        </div>
+      </form>
+    </Modal>
+  )
+}
