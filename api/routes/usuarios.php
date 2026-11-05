@@ -43,23 +43,7 @@ function guardar_centros(int $usuarioId, array $centros): void
     foreach ($centros as $c) q('INSERT INTO usuario_centro (usuario_id, centro_id) VALUES (?, ?)', [$usuarioId, $c]);
 }
 
-/* ---------- Bases de origen ---------- */
-
-function origen_usuario_por_id(string $origen, int $id): ?array
-{
-    $st = db_marca($origen)->prepare('SELECT id, nombre, apellido, documento, email, claveint, centro, otroscentros, facturacion FROM edd_users WHERE id = ?');
-    $st->execute([$id]);
-    $f = $st->fetch();
-    return $f ?: null;
-}
-
-function origen_usuarios_por_documento(string $origen, string $documento): array
-{
-    $st = db_marca($origen)->prepare('SELECT id, nombre, apellido, documento, email, claveint, centro, otroscentros, facturacion
-                                      FROM edd_users WHERE documento = ? ORDER BY id');
-    $st->execute([$documento]);
-    return $st->fetchAll();
-}
+/* ---------- Bases de origen (se consultan por la API de Eddis: origen_* en lib/integraciones.php) ---------- */
 
 /** Limpia el nombre del centro: quita el prefijo de la marca, espacios sobrantes y la doble codificación UTF-8. */
 function nombre_centro_origen(string $nombre): string
@@ -86,9 +70,7 @@ function ids_centros_fila(array $fila): array
 function centros_de_marca(string $marca, array $ids, array $principales): array
 {
     if (!$ids) return [];
-    $st = db_marca($marca)->prepare('SELECT id, nombre, activo FROM edd_centro WHERE id IN ' . in_list($ids));
-    $st->execute($ids);
-    $filas = $st->fetchAll();
+    $filas = origen_centros($marca, $ids);
     if (!$filas) return [];
     $codigos = array_map(fn($r) => (string)$r['id'], $filas);
     $locales = [];
@@ -100,7 +82,7 @@ function centros_de_marca(string $marca, array $ids, array $principales): array
         'marca' => $marca,
         'codigo' => (int)$r['id'],
         'nombre' => nombre_centro_origen((string)$r['nombre']),
-        'activo' => (int)$r['activo'] === 1,
+        'activo' => (bool)$r['activo'],
         'centro_id' => $locales[(string)$r['id']] ?? null,
         'principal' => in_array((int)$r['id'], $principales, true),
     ], $filas);
@@ -109,7 +91,7 @@ function centros_de_marca(string $marca, array $ids, array $principales): array
 /** Todos los centros activos de una marca, con el centro del proyecto vinculado si existe. */
 function centros_activos_marca(string $marca): array
 {
-    $ids = array_map('intval', array_column(db_marca($marca)->query('SELECT id FROM edd_centro WHERE activo = 1')->fetchAll(), 'id'));
+    $ids = array_map('intval', array_column(origen_centros($marca, null), 'id'));
     $out = centros_de_marca($marca, $ids, []);
     // Orden alfabético sin distinguir acentos (Adrogué junto a Adrián, Ñ junto a N).
     $clave = fn($n) => strtr(mb_strtolower($n), ['á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n']);
@@ -201,7 +183,7 @@ function resultado_busqueda(string $origen, array $f): array
         'apellido' => trim((string)$f['apellido']),
         'documento' => $f['documento'],
         'email' => $f['email'] ?: null,
-        'tiene_claveint' => !empty($f['claveint']),
+        'tiene_claveint' => !empty($f['tiene_clave']),
         'autorizado_facturar' => (int)$f['facturacion'] === 1,
         'centros_origen' => centros_autorizados($origen, $f),
     ];
@@ -269,7 +251,6 @@ route('POST', '/usuarios', function () {
     $nombre = trim((string)$f['nombre']) ?: 'Sin nombre';
     $apellido = trim((string)$f['apellido']) ?: '-';
     $email = trim((string)$f['email']) ?: null;
-    $claveint = trim((string)$f['claveint']) ?: null;
     $esStaff = v_bool($d, 'es_staff');
 
     $pdo = db();
@@ -277,13 +258,13 @@ route('POST', '/usuarios', function () {
     try {
         $centros = centros_de_payload($d, $origen, $f);
         if (!$esStaff && !$centros) throw new HttpError(422, 'Elegí al menos un centro.', ['campo' => 'centros']);
-        q('INSERT INTO usuario (documento, nombre, apellido, email, claveint, eddis_user_id, origen_usuario, es_staff) VALUES (?,?,?,?,?,?,?,?)',
-            [$documento, mb_substr($nombre, 0, 80), mb_substr($apellido, 0, 80), $email, $claveint, $origenId, $origen, $esStaff]);
+        q('INSERT INTO usuario (documento, nombre, apellido, email, eddis_user_id, origen_usuario, es_staff) VALUES (?,?,?,?,?,?,?)',
+            [$documento, mb_substr($nombre, 0, 80), mb_substr($apellido, 0, 80), $email, $origenId, $origen, $esStaff]);
         $id = (int)$pdo->lastInsertId();
         guardar_centros($id, $centros);
         audit('usuarios', 'crear', ['entidad' => 'usuario', 'entidad_id' => $id, 'critico' => true,
             'despues' => ['documento' => $documento, 'nombre' => "$nombre $apellido", 'email' => $email, 'origen' => $origen,
-                          'eddis_user_id' => $origenId, 'claveint' => $claveint ? '[copiada]' : null, 'es_staff' => (bool)$esStaff, 'centros' => $centros]]);
+                          'eddis_user_id' => $origenId, 'es_staff' => (bool)$esStaff, 'centros' => $centros]]);
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -294,7 +275,7 @@ route('POST', '/usuarios', function () {
 
 route('POST', '/usuarios/{id}/sincronizar', function ($p) {
     require_staff();
-    $u = q_one('SELECT id, documento, nombre, apellido, email, claveint, eddis_user_id, origen_usuario FROM usuario WHERE id = ?', [(int)$p['id']]);
+    $u = q_one('SELECT id, documento, nombre, apellido, email, eddis_user_id, origen_usuario FROM usuario WHERE id = ?', [(int)$p['id']]);
     if (!$u) throw new HttpError(404, 'El usuario no existe.');
     if (!$u['eddis_user_id'] || !$u['origen_usuario']) throw new HttpError(409, 'Este usuario no se dio de alta desde Eddis ni Studio Beauty.');
     $f = origen_usuario_por_id($u['origen_usuario'], (int)$u['eddis_user_id']);
@@ -303,7 +284,6 @@ route('POST', '/usuarios/{id}/sincronizar', function ($p) {
         'nombre' => mb_substr(trim((string)$f['nombre']) ?: $u['nombre'], 0, 80),
         'apellido' => mb_substr(trim((string)$f['apellido']) ?: $u['apellido'], 0, 80),
         'email' => trim((string)$f['email']) ?: null,
-        'claveint' => trim((string)$f['claveint']) ?: null,
     ];
     [$antes, $despues] = diff_campos($u, $nuevo);
     if (!$despues) return usuario_detalle((int)$u['id']) + ['sin_cambios' => true];

@@ -107,6 +107,55 @@ function api_validar_usuario(string $sistema, string $documento, string $clave):
 }
 
 /* ------------------------------------------------------------------ *
+ * Usuarios y centros de Eddis y Studio Beauty (api_fac_feddis.php de Eddis)
+ * POST {url_api_eddis}  Authorization: Bearer {token_api_eddis}
+ *   { "accion": "validar" | "usuarios" | "usuario" | "centros", "sistema": "ar" | "set", ... }
+ * Eddis compara la clave (md5 contra claveint): el hash nunca llega a este sistema.
+ * usuario = { id, nombre, apellido, documento, email, centro, otroscentros, facturacion, tiene_clave }
+ * ------------------------------------------------------------------ */
+function api_eddis(string $marca, string $accion, array $datos = []): array
+{
+    $token = conf('token_api_eddis');
+    if (conf('url_api_eddis') === '') {
+        throw new ExternalApiError('Falta la URL de la API de usuarios de Eddis. Completala en Utilidades → Configuración.');
+    }
+    $sistema = $marca === 'SB' ? conf('pais_sistema_sb', 'set') : conf('pais_sistema', 'ar');
+    // El token va también en el cuerpo: algunos servidores no pasan el encabezado Authorization a PHP.
+    $r = http_json('POST', conf('url_api_eddis'), $token, ['accion' => $accion, 'sistema' => $sistema, 'token' => $token] + $datos);
+    $status = $r['_http_status'] ?? 200;
+    if ($status >= 400) {
+        $nombre = $marca === 'SB' ? 'Studio Beauty' : 'Eddis';
+        throw new ExternalApiError("La API de {$nombre} respondió {$status}: " . ($r['error'] ?? 'sin detalle') . '.');
+    }
+    return $r;
+}
+
+/** Valida documento y clave en la base de la marca. → { existe, valido, usuario|null } */
+function origen_validar(string $marca, string $documento, string $clave): array
+{
+    $r = api_eddis($marca, 'validar', ['documento' => $documento, 'clave' => $clave]);
+    return ['existe' => (bool)($r['existe'] ?? false), 'valido' => (bool)($r['valido'] ?? false), 'usuario' => $r['usuario'] ?? null];
+}
+
+/** Filas de edd_users con ese documento (puede haber varias). */
+function origen_usuarios_por_documento(string $origen, string $documento): array
+{
+    return (array)(api_eddis($origen, 'usuarios', ['documento' => $documento])['usuarios'] ?? []);
+}
+
+function origen_usuario_por_id(string $origen, int $id): ?array
+{
+    return api_eddis($origen, 'usuario', ['id' => $id])['usuario'] ?? null;
+}
+
+/** Centros de edd_centro: los de esos ids, o todos los activos si $ids es null. → [ {id, nombre, activo} ] */
+function origen_centros(string $marca, ?array $ids): array
+{
+    if ($ids !== null && !$ids) return [];
+    return (array)(api_eddis($marca, 'centros', $ids === null ? [] : ['ids' => array_values($ids)])['centros'] ?? []);
+}
+
+/* ------------------------------------------------------------------ *
  * Pagos del sistema de gestión Eddis (api_pagos.php de Eddis)
  * GET {url_pagos_eddis}?centro={edd_centro.id}&fechadesde=AAAA-MM-DD&fechahasta=AAAA-MM-DD
  *     &cuota99=0|1&importe99=0&paissistema=ar

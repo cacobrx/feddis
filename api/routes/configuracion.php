@@ -5,6 +5,8 @@ const CONF_CAMPOS = [
     'modo_simulacion' => 'bool',
     'url_validacion_eddis' => 'url',
     'url_validacion_sb' => 'url',
+    'url_api_eddis' => 'url',
+    'token_api_eddis' => 'secret',
     'url_pagos_eddis' => 'url',
     'token_pagos_eddis' => 'secret',
     'url_arca' => 'url',
@@ -93,8 +95,8 @@ route('PUT', '/configuracion', function () {
 
 route('POST', '/configuracion/probar', function () {
     require_staff();
-    $servicio = v_enum(body(), 'servicio', 'Servicio', ['pagos', 'arca', 'usuarios', 'validacion_eddis', 'validacion_sb']);
-    $claveUrl = ['pagos' => 'url_pagos_eddis', 'arca' => 'url_arca', 'usuarios' => 'url_usuarios',
+    $servicio = v_enum(body(), 'servicio', 'Servicio', ['api_eddis', 'pagos', 'arca', 'usuarios', 'validacion_eddis', 'validacion_sb']);
+    $claveUrl = ['api_eddis' => 'url_api_eddis', 'pagos' => 'url_pagos_eddis', 'arca' => 'url_arca', 'usuarios' => 'url_usuarios',
                  'validacion_eddis' => 'url_validacion_eddis', 'validacion_sb' => 'url_validacion_sb'][$servicio];
     if (conf($claveUrl) === '') {
         return ['ok' => false, 'mensaje' => simulacion() ? 'Sin URL configurada: se usa la simulación.' : 'Sin URL configurada.'];
@@ -103,6 +105,14 @@ route('POST', '/configuracion/probar', function () {
     $inicio = microtime(true);
     try {
         switch ($servicio) {
+            case 'api_eddis':
+                // Pide los centros activos de las dos marcas: prueba URL, token y acceso a eddis_ar y eddis_set.
+                $n = count(origen_centros('EDDIS', null));
+                $m = count(origen_centros('SB', null));
+                $ms = (int)round((microtime(true) - $inicio) * 1000);
+                $res = ['ok' => true, 'mensaje' => "Respondió en {$ms} ms: {$n} centros activos de Eddis y {$m} de Studio Beauty."];
+                audit('configuracion', 'probar_conexion', ['despues' => ['servicio' => $servicio] + $res]);
+                return $res;
             case 'pagos':
                 $r = http_json('GET', conf('url_pagos_eddis'), conf('token_pagos_eddis'), null,
                     ['centro' => '0', 'fechadesde' => date('Y-m-d'), 'fechahasta' => date('Y-m-d'), 'cuota99' => 0, 'importe99' => 0, 'paissistema' => conf('pais_sistema', 'ar')]);

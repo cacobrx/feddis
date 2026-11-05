@@ -2,39 +2,31 @@
 declare(strict_types=1);
 
 /**
- * Valida contra eddis_ar.edd_users: el documento puede tener varias filas,
- * alcanza con que la clave coincida con el claveint (MD5) de alguna.
+ * Valida documento y clave en Eddis (o Studio Beauty) por la API de Eddis.
+ * El documento puede tener varias filas: alcanza con que la clave coincida con una. La comparación la hace Eddis.
  */
 function validar_en_origen(string $marca, string $documento, string $clave): array
 {
     try {
-        $st = db_marca($marca)->prepare('SELECT id, nombre, apellido, email, claveint FROM edd_users WHERE documento = ? ORDER BY id');
-        $st->execute([$documento]);
-        $filas = $st->fetchAll();
-    } catch (PDOException $e) {
-        error_log('[eddisfac] base de origen ' . $marca . ': ' . $e->getMessage());
-        throw new HttpError(503, 'No se pudo consultar la base de ' . ($marca === 'SB' ? 'Studio Beauty' : 'Eddis') . '. Intentá de nuevo en unos minutos.');
+        $r = origen_validar($marca, $documento, $clave);
+    } catch (ExternalApiError $e) {
+        error_log('[eddisfac] API de origen ' . $marca . ': ' . $e->getMessage());
+        throw new HttpError(503, 'No se pudo consultar ' . ($marca === 'SB' ? 'Studio Beauty' : 'Eddis') . '. Intentá de nuevo en unos minutos.');
     }
-    $res = ['existe' => (bool)$filas, 'valido' => false, 'autorizado_facturar' => true, 'nombre' => null, 'apellido' => null];
-    $md5 = md5($clave);
-    foreach ($filas as $f) {
-        $hash = strtolower(trim((string)$f['claveint']));
-        if ($hash !== '' && hash_equals($hash, $md5)) {
-            return [
-                'existe' => true,
-                'valido' => true,
-                // La habilitación para facturar la otorga el alta en este sistema (tabla usuario).
-                'autorizado_facturar' => true,
-                'nombre' => trim((string)$f['nombre']) ?: null,
-                'apellido' => trim((string)$f['apellido']) ?: null,
-                'email' => trim((string)$f['email']) ?: null,
-                'claveint' => $hash,
-                'eddis_user_id' => (int)$f['id'],
-                'origen' => $marca,
-            ];
-        }
-    }
-    return $res;
+    $res = ['existe' => $r['existe'], 'valido' => false, 'autorizado_facturar' => true, 'nombre' => null, 'apellido' => null];
+    $f = $r['usuario'];
+    if (!$r['valido'] || !is_array($f)) return $res;
+    return [
+        'existe' => true,
+        'valido' => true,
+        // La habilitación para facturar la otorga el alta en este sistema (tabla usuario).
+        'autorizado_facturar' => true,
+        'nombre' => trim((string)$f['nombre']) ?: null,
+        'apellido' => trim((string)$f['apellido']) ?: null,
+        'email' => trim((string)($f['email'] ?? '')) ?: null,
+        'eddis_user_id' => (int)$f['id'],
+        'origen' => $marca,
+    ];
 }
 
 function sesion_payload(array $u): array
@@ -124,8 +116,8 @@ route('POST', '/auth/login', function () {
         return sesion_payload($user);
     }
 
-    // 1) Eddis: documento + md5(clave) contra eddis_ar.edd_users.claveint.
-    // 2) Si el documento no existe en Eddis, Studio Beauty: eddis_set.edd_users.claveint
+    // 1) Eddis: documento + clave contra eddis_ar.edd_users (por la API de Eddis).
+    // 2) Si el documento no existe en Eddis, Studio Beauty: eddis_set.edd_users
     //    (y, si tampoco está ahí, la API de validación de SB o su simulación).
     $sistema = 'EDDIS';
     $r = validar_en_origen('EDDIS', $documento, $clave);
@@ -147,8 +139,8 @@ route('POST', '/auth/login', function () {
     }
     if (!empty($r['eddis_user_id'])) {
         // Mantiene la copia local alineada con la fila de Eddis que validó.
-        q('UPDATE usuario SET claveint = ?, eddis_user_id = ?, origen_usuario = ?, email = COALESCE(?, email) WHERE id = ?',
-            [$r['claveint'], $r['eddis_user_id'], $r['origen'], $r['email'], $u['id']]);
+        q('UPDATE usuario SET eddis_user_id = ?, origen_usuario = ?, email = COALESCE(?, email) WHERE id = ?',
+            [$r['eddis_user_id'], $r['origen'], $r['email'], $u['id']]);
     }
     q('UPDATE usuario SET ultimo_login = NOW() WHERE id = ?', [$u['id']]);
 

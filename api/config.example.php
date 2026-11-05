@@ -8,15 +8,8 @@ return [
         'user' => 'feddis',
         'pass' => 'cambiar',
     ],
-    // Base del sistema de gestión Eddis, para buscar usuarios a habilitar (solo lectura).
-    // host, port, user y pass son opcionales: si faltan se usan los de 'db'.
-    'db_eddis' => [
-        'name' => 'eddis_ar',
-    ],
-    // Base de Studio Beauty (eddis_set): usuarios y centros de SB.
-    'db_sb' => [
-        'name' => 'eddis_set',
-    ],
+    // Los usuarios y centros de Eddis y Studio Beauty se consultan por la API de Eddis (api_fac_feddis.php):
+    // su URL y su token se cargan en Utilidades → Configuración.
     // Clave de 32 bytes en base64 para cifrar tokens de APIs.
     // Generar con: php -r "echo base64_encode(random_bytes(32)), PHP_EOL;"
     'app_key'  => 'CAMBIAR',

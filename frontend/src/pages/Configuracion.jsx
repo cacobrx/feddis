@@ -7,6 +7,12 @@ import { fmtDateTime } from '../lib/format'
 
 const SECCIONES = [
   {
+    titulo: 'Usuarios y centros de Eddis',
+    descripcion: 'API de Eddis (api_fac_feddis.php) con la que se valida el ingreso y se buscan usuarios y centros de Eddis y Studio Beauty.',
+    campos: [['url_api_eddis', 'URL de la API de usuarios'], ['token_api_eddis', 'Token de acceso', true]],
+    probar: [['api_eddis', 'Probar conexión']],
+  },
+  {
     titulo: 'Validación de usuarios',
     descripcion: 'Se consulta al ingresar: primero Eddis y, si el documento no existe, Studio Beauty.',
     campos: [['url_validacion_eddis', 'URL de validación Eddis'], ['url_validacion_sb', 'URL de validación Studio Beauty']],

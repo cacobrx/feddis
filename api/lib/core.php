@@ -51,38 +51,6 @@ function db(): PDO
     return $pdo;
 }
 
-/**
- * Conexión de solo lectura a una base de origen: 'db_eddis' (eddis_ar) o 'db_sb' (eddis_set, Studio Beauty).
- * host, port, user y pass son opcionales: si faltan se usan los de 'db'.
- */
-function db_origen(string $clave): PDO
-{
-    static $pdos = [];
-    if (!isset($pdos[$clave])) {
-        $c = cfg($clave);
-        if (!is_array($c) || empty($c['name'])) {
-            throw new HttpError(500, "Falta configurar '{$clave}' en api/config.php.");
-        }
-        $main = cfg('db');
-        $pdos[$clave] = new PDO(
-            sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $c['host'] ?? $main['host'], $c['port'] ?? $main['port'] ?? 3306, $c['name']),
-            $c['user'] ?? $main['user'],
-            $c['pass'] ?? $main['pass'],
-            [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_EMULATE_PREPARES => false,
-            ]
-        );
-    }
-    return $pdos[$clave];
-}
-
-function db_eddis(): PDO { return db_origen('db_eddis'); }
-function db_sb(): PDO { return db_origen('db_sb'); }
-/** Base de origen según marca: EDDIS → eddis_ar, SB → eddis_set. */
-function db_marca(string $marca): PDO { return $marca === 'SB' ? db_sb() : db_eddis(); }
-
 function q(string $sql, array $params = []): PDOStatement
 {
     $st = db()->prepare($sql);

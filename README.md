@@ -42,10 +42,10 @@ En producción conviene que Apache publique solo `app/` y `api/` (o negar `sql/`
 1. **Usuario maestro** (`api/config.php`, se define con `php bin/clave_maestra.php <documento>`): staff, validado localmente.
    **Clave maestra:** esa misma clave, con el documento de cualquier usuario habilitado, ingresa como ese usuario
    (sin validar en Eddis ni Studio Beauty). Queda en la auditoría como `login_clave_maestra`.
-2. **Eddis:** si el documento existe en `eddis_ar.edd_users`, se compara `md5(clave)` con `claveint`.
-   Si el documento tiene varias filas, alcanza con que coincida una.
-3. **Studio Beauty:** si el documento no existe en Eddis, se valida con la API de Studio Beauty
-   (si tampoco está en `eddis_set`, se usa la API de validación de Studio Beauty o su simulación).
+2. **Eddis:** si el documento existe en `eddis_ar.edd_users`, Eddis compara `md5(clave)` con `claveint`
+   (por la API `api_fac_feddis.php`; el hash nunca sale de Eddis). Si el documento tiene varias filas, alcanza con que coincida una.
+3. **Studio Beauty:** si el documento no existe en Eddis, lo mismo contra `eddis_set`
+   (si tampoco está ahí, se usa la API de validación de Studio Beauty o su simulación).
 
 Los centros y usuarios de ejemplo de `003_datos_iniciales.sql` se quitan en las migraciones 009 y 010;
 en una instalación nueva se ingresa con el usuario maestro y se dan de alta los usuarios reales.
@@ -56,7 +56,7 @@ En todos los casos el documento tiene que estar habilitado en Utilidades → Usu
 
 Se activa en Utilidades → Configuración y **solo reemplaza a los servicios que no tienen URL cargada**.
 Los pagos usan la API real de Eddis (`api_pagos.php`); ARCA y la validación de Studio Beauty siguen simulados
-hasta cargar sus URL. La validación de Eddis siempre es real, contra `eddis_ar`.
+hasta cargar sus URL. La validación de Eddis siempre es real: va por la API de usuarios de Eddis (`url_api_eddis` + `token_api_eddis`).
 
 La API de pagos tarda ~15-30 s por centro y mes: se espera hasta 120 s y la respuesta se reutiliza
 30 minutos al generar comprobantes (tabla `cache_pagos`). Cada centro necesita su `edd_centro.id` como código en Eddis.
@@ -67,6 +67,7 @@ Definidos en `api/lib/integraciones.php`. Si los servicios reales responden dist
 
 | Servicio | Llamada | Respuesta |
 | --- | --- | --- |
+| Usuarios y centros (`api_fac_feddis.php` de Eddis) | `POST {url}` `{accion: validar\|usuarios\|usuario\|centros, sistema: ar\|set, ...}` | ver el encabezado del archivo en Eddis |
 | Validación (Eddis / SB) | `POST {url}` `{documento, clave}` | `{existe, valido, nombre, apellido, autorizado_facturar}` (404 = no existe) |
 | Pagos Eddis (`api_pagos.php`) | `GET {url}?centro={edd_centro.id}&fechadesde=&fechahasta=&cuota99=&importe99=0&paissistema=ar` | `{respuesta: 200, data: [{id, alumno, documento, curso, cuota, fechapago, importe, fpago, ...}]}` |
 | Usuarios | `GET {url}` | `{usuarios: [{documento, nombre, apellido}]}` |
