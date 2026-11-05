@@ -18,6 +18,7 @@ export default function Pagos() {
   const [sel, setSel] = useState(() => new Set())
   const [confirmar, setConfirmar] = useState(false)
   const [agrupar, setAgrupar] = useState(false)
+  const [editTope, setEditTope] = useState(false)
   const [run, busy] = useAction()
 
   const consultar = async (e) => {
@@ -184,7 +185,7 @@ export default function Pagos() {
           </section>
 
           {res.tope && (
-            <TopeGauge tope={res.tope} seleccionado={totalSel} cantidad={sel.size}>
+            <TopeGauge tope={res.tope} seleccionado={totalSel} cantidad={sel.size} onEditarTope={res.cuit ? () => setEditTope(true) : undefined}>
               <div className="toolbar">
                 {sel.size > 0 && <Button variant="ghost" onClick={() => setSel(new Set())}>Limpiar selección</Button>}
                 <Button variant="primary" disabled={!sel.size || excede || res.tope.tope <= 0} onClick={() => setConfirmar(true)}>
@@ -193,8 +194,13 @@ export default function Pagos() {
               </div>
             </TopeGauge>
           )}
-          {res.tope && res.tope.tope <= 0 && <div style={{ marginTop: 12 }}><Alert kind="warn">El CUIT no tiene tope mensual cargado; no se pueden generar comprobantes hasta completarlo en <Link to="/cuit">CUIT</Link>.</Alert></div>}
+          {res.tope && res.tope.tope <= 0 && <div style={{ marginTop: 12 }}><Alert kind="warn">El CUIT no tiene tope mensual cargado; no se pueden generar comprobantes hasta completarlo. <Button size="sm" onClick={() => setEditTope(true)}>Cargar el tope</Button></Alert></div>}
         </>
+      )}
+
+      {editTope && res?.cuit && (
+        <TopeForm cuit={res.cuit} tope={res.tope} onClose={() => setEditTope(false)}
+          onSaved={(tope) => { setRes((r) => ({ ...r, tope })); setEditTope(false) }} />
       )}
 
       {confirmar && (
@@ -219,5 +225,32 @@ export default function Pagos() {
         </Modal>
       )}
     </div>
+  )
+}
+
+function TopeForm({ cuit, tope, onClose, onSaved }) {
+  const [valor, setValor] = useState(tope?.tope ? String(tope.tope) : '')
+  const [error, setError] = useState(null)
+  const [run, busy] = useAction()
+
+  const guardar = async (e) => {
+    e.preventDefault()
+    const r = await run(() => api.put(`/cuits/${cuit.id}/tope`, { tope_facturacion: valor }), 'Tope de facturación actualizado.', (err) => setError(err.message))
+    if (r) onSaved(r.tope)
+  }
+
+  return (
+    <Modal title="Tope de facturación mensual" onClose={onClose} footer={<>
+      <Button onClick={onClose}>Cancelar</Button>
+      <Button variant="primary" type="submit" form="tope-form" loading={busy}>Guardar tope</Button>
+    </>}>
+      <form id="tope-form" onSubmit={guardar} style={{ display: 'grid', gap: 12 }}>
+        <Field label={`Tope mensual de ${cuit.razon_social} ($)`} error={error} htmlFor="tope-valor"
+          hint={tope ? `Facturado este mes: ${fmtMoney(tope.facturado)}. El cambio queda guardado en el CUIT.` : 'El cambio queda guardado en el CUIT.'}>
+          <input id="tope-valor" className="input" type="number" step="0.01" min="0" value={valor} autoFocus required
+            onChange={(e) => { setValor(e.target.value); setError(null) }} aria-invalid={!!error} />
+        </Field>
+      </form>
+    </Modal>
   )
 }

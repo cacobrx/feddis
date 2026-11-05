@@ -132,3 +132,19 @@ route('POST', '/cuits/{id}/reactivar', function ($p) {
     audit('cuit', 'reactivar', ['centro_id' => (int)$actual['centro_id'], 'entidad' => 'cuit', 'entidad_id' => $actual['id'], 'antes' => ['activo' => 0], 'despues' => ['activo' => 1]]);
     return ['ok' => true];
 });
+
+// Cambio rápido del tope mensual (desde Pagos). Mismo permiso que editar el CUIT: staff o usuario del centro.
+route('PUT', '/cuits/{id}/tope', function ($p) {
+    $u = require_user();
+    $actual = q_one('SELECT * FROM cuit WHERE id = ?', [(int)$p['id']]);
+    if (!$actual) throw new HttpError(404, 'El CUIT no existe.');
+    require_centro($u, $actual['centro_id']);
+    $tope = v_money(body(), 'tope_facturacion', 'Tope de facturación', true);
+    if ((float)$tope !== (float)$actual['tope_facturacion']) {
+        q('UPDATE cuit SET tope_facturacion = ? WHERE id = ?', [$tope, $actual['id']]);
+        audit('cuit', 'actualizar', ['centro_id' => (int)$actual['centro_id'], 'entidad' => 'cuit', 'entidad_id' => $actual['id'],
+            'antes' => ['tope_facturacion' => $actual['tope_facturacion']], 'despues' => ['tope_facturacion' => $tope]]);
+        $actual['tope_facturacion'] = $tope;
+    }
+    return ['tope' => resumen_tope($actual)];
+});
