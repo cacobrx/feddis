@@ -1,4 +1,5 @@
 # Compila el frontend y publica la app por FTP en cada push a main.
+# Producción: https://feddis.planbsistemas.com.ar (la app va en la raíz del subdominio, la API en /api).
 # Secrets requeridos: FTP_SERVER, FTP_USERNAME, FTP_PASSWORD.
 # Variables opcionales: FTP_DIR (carpeta destino), FTP_PROTOCOL (ftp | ftps), API_PATH.
 name: Deploy FTP
@@ -27,7 +28,7 @@ jobs:
       - name: Compilar frontend
         working-directory: frontend
         env:
-          VITE_API: ${{ vars.API_PATH || '/feddis/api/index.php' }}
+          VITE_API: ${{ vars.API_PATH || '/api/index.php' }}
         run: |
           npm ci
           npm run build
@@ -35,7 +36,8 @@ jobs:
       - name: Armar carpeta de publicación
         run: |
           mkdir deploy
-          cp -r app api index.php deploy/
+          cp -r app/. deploy/
+          cp -r api deploy/
           rm -f deploy/api/config.php
 
       - name: Subir por FTP
