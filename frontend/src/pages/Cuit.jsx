@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Plus, Pencil, Trash2, RotateCcw } from 'lucide-react'
 import { useSession } from '../context/Session'
 import { api } from '../lib/api'
@@ -72,7 +72,7 @@ export default function Cuit() {
         )}
       </section>
 
-      {edit && <CuitForm inicial={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); done() }} />}
+      {edit && <CuitForm inicial={edit} existentes={data ?? []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); done() }} />}
       {borrar && (
         <Confirm title="Dar de baja el CUIT" danger confirmLabel="Dar de baja" onClose={() => setBorrar(null)}
           onConfirm={async () => { if (await run(() => api.del(`/cuits/${borrar.id}`), (r) => r.desactivado ? 'El CUIT tiene comprobantes: quedó inactivo.' : 'CUIT eliminado.')) done() }}
@@ -82,11 +82,36 @@ export default function Cuit() {
   )
 }
 
-function CuitForm({ inicial, onClose, onSaved }) {
+// Campos fiscales que se copian de un CUIT ya cargado (el centro y la cuota 99 son propios de cada alta).
+const CAMPOS_COPIABLES = ['razon_social', 'nombre_fantasia', 'domicilio', 'ciudad', 'condicion_iva', 'ingresos_brutos', 'alicuota', 'punto_venta',
+  'inicio_actividades', 'venc_certificado', 'tope_facturacion', 'modo_prueba', 'arca_simulado']
+
+function CuitForm({ inicial, existentes, onClose, onSaved }) {
   const { esStaff, centros } = useSession()
-  const { values: v, set, errors, fail } = useForm(inicial)
+  const { values: v, set, setValues, errors, fail } = useForm(inicial)
   const [run, busy] = useAction()
   const nuevo = !inicial.id
+  const [copiado, setCopiado] = useState(null)
+  const ultimoBuscado = useRef('')
+
+  // Al dar de alta, si el CUIT ingresado ya existe en otro centro, se cargan sus datos (una vez por número).
+  const cambiarCuit = (e) => {
+    set('cuit')(e)
+    if (!nuevo) return
+    const digitos = e.target.value.replace(/\D/g, '')
+    if (digitos.length !== 11) { ultimoBuscado.current = ''; setCopiado(null); return }
+    if (digitos === ultimoBuscado.current) return
+    ultimoBuscado.current = digitos
+    const previo = existentes.filter((c) => c.cuit === digitos).sort((a, b) => (b.activo - a.activo) || (b.id - a.id))[0]
+    if (!previo) { setCopiado(null); return }
+    const datos = {}
+    for (const k of CAMPOS_COPIABLES) datos[k] = previo[k] ?? ''
+    datos.alicuota = String(previo.alicuota)
+    datos.tope_facturacion = String(previo.tope_facturacion)
+    datos.punto_venta = String(previo.punto_venta)
+    setValues((s) => ({ ...s, ...datos }))
+    setCopiado(previo)
+  }
 
   const save = async (e) => {
     e.preventDefault()
@@ -116,9 +141,15 @@ function CuitForm({ inicial, onClose, onSaved }) {
             </select>
           </Field>
         )}
+        {nuevo && f('cuit', 'CUIT', { required: true, inputMode: 'numeric', placeholder: '30-12345678-9', onChange: cambiarCuit, autoFocus: !esStaff })}
+        {copiado && (
+          <div className="span-2">
+            <Alert kind="info">Este CUIT ya está cargado{copiado.centro_nombre ? ` en ${copiado.centro_nombre}` : ''}{copiado.activo ? '' : ' (inactivo)'}: se completaron sus datos. Revisalos antes de guardar, en especial el punto de venta.</Alert>
+          </div>
+        )}
         {f('razon_social', 'Razón social', { required: true, span: true })}
         {f('nombre_fantasia', 'Nombre fantasía')}
-        {f('cuit', 'CUIT', { required: true, inputMode: 'numeric', placeholder: '30-12345678-9' })}
+        {!nuevo && f('cuit', 'CUIT', { required: true, inputMode: 'numeric', placeholder: '30-12345678-9' })}
         {f('domicilio', 'Domicilio')}
         {f('ciudad', 'Ciudad')}
         <Field label="Condición IVA" error={errors.condicion_iva} htmlFor="cu-iva">
