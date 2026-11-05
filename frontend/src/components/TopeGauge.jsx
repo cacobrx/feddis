@@ -5,7 +5,7 @@ import { fmtMoney } from '../lib/format'
  * Medidor del tope mensual del CUIT: lo ya facturado en el mes, lo seleccionado
  * ahora y, si se pasa, el excedente rayado. Es el control que evita superar el tope.
  */
-export default function TopeGauge({ tope, seleccionado, cantidad, onEditarTope, children }) {
+export default function TopeGauge({ tope, seleccionado, cantidad, pendientes, onEditarTope, children }) {
   const usado = tope.facturado
   const limite = tope.tope
   const total = usado + seleccionado
@@ -20,6 +20,12 @@ export default function TopeGauge({ tope, seleccionado, cantidad, onEditarTope, 
     <div className={`tope ${excede ? 'is-over' : ''}`} aria-live="polite">
       <div className="tope-row">
         <div className="tope-figs">
+          {pendientes && (
+            <div className="tope-fig">
+              <small>Pagos sin facturar · {pendientes.cantidad}</small>
+              <strong>{fmtMoney(pendientes.total)}</strong>
+            </div>
+          )}
           <div className="tope-fig">
             <small><span className="tope-key" style={{ background: 'var(--ink-2)' }} />Facturado en el mes</small>
             <strong>{fmtMoney(usado)}</strong>

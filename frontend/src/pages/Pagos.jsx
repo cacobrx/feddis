@@ -5,7 +5,7 @@ import { useSession } from '../context/Session'
 import { api } from '../lib/api'
 import { Alert, Button, Empty, EstadoBadge, Field, Loading, Modal, PageHead, Switch, useAction } from '../components/ui'
 import TopeGauge from '../components/TopeGauge'
-import { firstOfMonth, fmtDate, fmtMoney, fmtNumero, today } from '../lib/format'
+import { addDays, firstOfMonth, fmtDate, fmtMoney, fmtNumero, today } from '../lib/format'
 
 export default function Pagos() {
   const { centro, centroId } = useSession()
@@ -19,6 +19,8 @@ export default function Pagos() {
   const [confirmar, setConfirmar] = useState(false)
   const [agrupar, setAgrupar] = useState(false)
   const [editTope, setEditTope] = useState(false)
+  const [fechaFactura, setFechaFactura] = useState(today)
+  const [formaPago, setFormaPago] = useState('')
   const [run, busy] = useAction()
 
   const consultar = async (e) => {
@@ -36,10 +38,23 @@ export default function Pagos() {
     }
   }
 
-  const pagos = res?.pagos ?? []
+  const todosLosPagos = res?.pagos ?? []
+  const formasPago = useMemo(() => {
+    const f = new Set(todosLosPagos.map((p) => p.forma_pago || 'Sin especificar'))
+    if (formaPago) f.add(formaPago)
+    return [...f].sort((a, b) => a.localeCompare(b, 'es'))
+  }, [todosLosPagos, formaPago])
+  // Todo lo que sigue (listado, totales, selección hasta el tope) trabaja sobre los pagos de la forma de pago elegida.
+  const pagos = useMemo(() => formaPago ? todosLosPagos.filter((p) => (p.forma_pago || 'Sin especificar') === formaPago) : todosLosPagos, [todosLosPagos, formaPago])
+  const cambiarFormaPago = (e) => {
+    const f = e.target.value
+    setFormaPago(f)
+    // Al filtrar, se desmarcan los pagos que quedan ocultos para no facturar algo que no se ve.
+    if (f) setSel((s) => new Set([...s].filter((id) => todosLosPagos.some((p) => p.id === id && (p.forma_pago || 'Sin especificar') === f))))
+  }
   const visibles = useMemo(() => pagos.filter((p) =>
     vista === 'todos' ? true : vista === 'facturados' ? p.comprobante : !p.comprobante), [pagos, vista])
-  const seleccionados = pagos.filter((p) => sel.has(p.id))
+  const seleccionados = todosLosPagos.filter((p) => sel.has(p.id))
   const totalSel = seleccionados.reduce((s, p) => s + p.importe, 0)
   const disponible = res?.tope ? res.tope.tope - res.tope.facturado : 0
   const excede = res?.tope ? totalSel > disponible + 0.001 : false
@@ -68,6 +83,7 @@ export default function Pagos() {
       hasta: res.consulta.hasta,
       pago_ids: [...sel],
       agrupar,
+      fecha: fechaFactura,
     }), (r) => `Se generaron ${r.creados} comprobantes pendientes de autorizar.`)
     setConfirmar(false)
     if (r) navigate('/comprobantes?estado=PENDIENTE')
@@ -127,6 +143,13 @@ export default function Pagos() {
                 ))}
               </div>
               <div className="toolbar">
+                <label className="small" htmlFor="pg-forma" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  Forma de pago
+                  <select id="pg-forma" className="select" style={{ width: 'auto' }} value={formaPago} onChange={cambiarFormaPago}>
+                    <option value="">Todos</option>
+                    {formasPago.map((f) => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                </label>
                 <span className="pago-leyenda" aria-label="Referencia de colores">
                   <span><i className="ley-generado" />Factura generada</span>
                   <span><i className="ley-autorizado" />Factura autorizada</span>
@@ -186,7 +209,7 @@ export default function Pagos() {
           </section>
 
           {res.tope && (
-            <TopeGauge tope={res.tope} seleccionado={totalSel} cantidad={sel.size} onEditarTope={res.cuit ? () => setEditTope(true) : undefined}>
+            <TopeGauge tope={res.tope} seleccionado={totalSel} cantidad={sel.size} pendientes={{ cantidad: sinFacturar.length, total: sinFacturar.reduce((s, p) => s + p.importe, 0) }} onEditarTope={res.cuit ? () => setEditTope(true) : undefined}>
               <div className="toolbar">
                 {sel.size > 0 && <Button variant="ghost" onClick={() => setSel(new Set())}>Limpiar selección</Button>}
                 <Button onClick={hastaElTope} disabled={!res.cuit || !sinFacturar.length || disponible <= 0}
@@ -211,7 +234,7 @@ export default function Pagos() {
       {confirmar && (
         <Modal title="Generar comprobantes" onClose={() => setConfirmar(false)} footer={<>
           <Button onClick={() => setConfirmar(false)}>Cancelar</Button>
-          <Button variant="primary" loading={busy} onClick={generar}>Generar comprobantes</Button>
+          <Button variant="primary" loading={busy} disabled={!fechaFactura} onClick={generar}>Generar comprobantes</Button>
         </>}>
           <div style={{ display: 'grid', gap: 16 }}>
             <dl className="kv">
@@ -219,6 +242,10 @@ export default function Pagos() {
               <dt>Importe total</dt><dd><strong>{fmtMoney(totalSel)}</strong></dd>
               <dt>A empresas</dt><dd>{seleccionados.filter((p) => p.tercero).length} pagos con datos de terceros</dd>
             </dl>
+            <Field label="Fecha de factura" htmlFor="pg-fecha-factura" hint="Todos los comprobantes se generan con esta fecha. ARCA acepta hasta 10 días antes o después de hoy.">
+              <input id="pg-fecha-factura" className="input" type="date" value={fechaFactura} min={addDays(today(), -10)} max={addDays(today(), 10)}
+                onChange={(e) => setFechaFactura(e.target.value)} required />
+            </Field>
             <Switch checked={agrupar} onChange={setAgrupar} label="Un comprobante por alumno (agrupa sus pagos)" />
             <p className="muted small">
               {agrupar

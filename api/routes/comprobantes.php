@@ -54,7 +54,12 @@ route('POST', '/comprobantes/generar', function () {
         $grupos[$key][] = $p;
     }
 
-    $fecha = date('Y-m-d');
+    // Fecha de las facturas: hoy por defecto. ARCA acepta, para servicios, hasta 10 días antes o después de hoy.
+    $fecha = v_date($d, 'fecha', 'Fecha de factura', false) ?? date('Y-m-d');
+    $hoy = new DateTimeImmutable('today');
+    if ($fecha < $hoy->modify('-10 days')->format('Y-m-d') || $fecha > $hoy->modify('+10 days')->format('Y-m-d')) {
+        throw new HttpError(422, 'La fecha de factura debe estar entre 10 días antes y 10 días después de hoy (regla de ARCA para servicios).', ['campo' => 'fecha']);
+    }
     $totalSeleccion = round(array_sum(array_column($pagos, 'importe')), 2);
 
     $pdo = db();
@@ -86,6 +91,13 @@ route('POST', '/comprobantes/generar', function () {
             $total = round(array_sum(array_column($grupo, 'importe')), 2);
             $imp = desglose_importes($total, $cuit['condicion_iva'], (float)$cuit['alicuota']);
             $tipo = tipo_factura($cuit['condicion_iva'], $receptor['condicion']);
+            // ARCA rechaza un comprobante con fecha anterior al último autorizado del mismo tipo y punto de venta.
+            $ultima = q_val("SELECT MAX(fecha) FROM comprobante WHERE cuit_id = ? AND punto_venta = ? AND tipo = ? AND estado = 'AUTORIZADO' AND modo_prueba = ?",
+                [$cuit['id'], $cuit['punto_venta'], $tipo, $cuit['modo_prueba']]);
+            if ($ultima && $fecha < $ultima) {
+                throw new HttpError(422, sprintf('Ya hay una %s autorizada con fecha %s: la fecha de factura no puede ser anterior.',
+                    TIPOS_COMPROBANTE[$tipo] ?? 'factura', date('d/m/Y', strtotime($ultima))), ['campo' => 'fecha']);
+            }
 
             q('INSERT INTO comprobante (cuit_id, centro_id, clase, tipo, punto_venta, fecha, receptor_doc_tipo, receptor_doc_nro, receptor_nombre,
                   receptor_domicilio, receptor_ciudad, receptor_condicion_iva, alumno_documento, alumno_nombre, es_tercero, alicuota,
