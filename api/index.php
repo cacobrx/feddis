@@ -50,7 +50,7 @@ try {
     json_out(['error' => $e->getMessage(), 'externo' => true], 502);
 } catch (PDOException $e) {
     error_log('[eddisfac] ' . $e->getMessage());
-    if (db()->inTransaction()) db()->rollBack();
+    try { if (db()->inTransaction()) db()->rollBack(); } catch (Throwable) {}
     json_out(['error' => cfg('debug') ? $e->getMessage() : 'Error de base de datos. El detalle quedó en el log del servidor.'], 500);
 } catch (Throwable $e) {
     error_log('[eddisfac] ' . $e);

@@ -30,16 +30,22 @@ function db(): PDO
     static $pdo = null;
     if ($pdo === null) {
         $c = cfg('db');
-        $pdo = new PDO(
-            sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $c['host'], $c['port'] ?? 3306, $c['name']),
-            $c['user'],
-            $c['pass'],
-            [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_EMULATE_PREPARES => false,
-            ]
-        );
+        try {
+            $pdo = new PDO(
+                sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $c['host'], $c['port'] ?? 3306, $c['name']),
+                $c['user'],
+                $c['pass'],
+                [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_EMULATE_PREPARES => false,
+                ]
+            );
+        } catch (PDOException $e) {
+            // 1045 = usuario o clave, 1044 = sin permiso sobre la base, 1049 = base inexistente, 2002 = host.
+            error_log('[eddisfac] conexión a la base: ' . $e->getMessage());
+            throw new HttpError(503, 'No se pudo conectar con la base de datos del sistema (MySQL ' . ($e->errorInfo[1] ?? $e->getCode()) . ').');
+        }
         $pdo->exec("SET time_zone = '" . date('P') . "'");
     }
     return $pdo;
