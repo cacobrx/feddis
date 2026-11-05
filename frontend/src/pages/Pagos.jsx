@@ -48,10 +48,12 @@ export default function Pagos() {
 
   const toggle = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleTodos = () => setSel(todosMarcados ? new Set() : new Set(libres.map((p) => p.id)))
+  // Marca pagos sin facturar, del más antiguo al más nuevo, mientras entren en lo que queda del tope.
+  const sinFacturar = pagos.filter((p) => !p.comprobante)
   const hastaElTope = () => {
     const n = new Set()
     let acc = 0
-    for (const p of libres) {
+    for (const p of sinFacturar) {
       if (acc + p.importe > disponible + 0.001) continue
       acc += p.importe
       n.add(p.id)
@@ -130,7 +132,6 @@ export default function Pagos() {
                   <span><i className="ley-autorizado" />Factura autorizada</span>
                 </span>
                 {res.cuit?.importar_cuota_99 && <span className="badge badge-accent">Incluye cuota 99 (examen)</span>}
-                {res.tope && libres.length > 0 && <Button size="sm" onClick={hastaElTope}>Seleccionar hasta el tope</Button>}
               </div>
             </div>
             {visibles.length === 0
@@ -188,6 +189,10 @@ export default function Pagos() {
             <TopeGauge tope={res.tope} seleccionado={totalSel} cantidad={sel.size} onEditarTope={res.cuit ? () => setEditTope(true) : undefined}>
               <div className="toolbar">
                 {sel.size > 0 && <Button variant="ghost" onClick={() => setSel(new Set())}>Limpiar selección</Button>}
+                <Button onClick={hastaElTope} disabled={!res.cuit || !sinFacturar.length || disponible <= 0}
+                  title={disponible <= 0 ? 'No queda disponible en el tope del mes' : 'Marca los pagos sin facturar, del más antiguo al más nuevo, sin pasar el tope'}>
+                  Seleccionar hasta el tope
+                </Button>
                 <Button variant="primary" disabled={!sel.size || excede || res.tope.tope <= 0} onClick={() => setConfirmar(true)}>
                   Generar comprobantes
                 </Button>
