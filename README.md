@@ -12,9 +12,9 @@ fiscales autorizados por ARCA, para los centros de Eddis y Studio Beauty.
 1. Crear la base y el usuario MySQL:
 
    ```sql
-   CREATE DATABASE eddisfac CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-   CREATE USER 'eddisfac'@'localhost' IDENTIFIED BY '<clave>';
-   GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES, TRIGGER ON eddisfac.* TO 'eddisfac'@'localhost';
+   CREATE DATABASE feddis CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+   CREATE USER 'feddis'@'localhost' IDENTIFIED BY '<clave>';
+   GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES, TRIGGER ON feddis.* TO 'feddis'@'localhost';
    ```
 
    Los triggers de `002_auditoria_inmutable.sql` impiden modificar o borrar la auditoría.

@@ -4,8 +4,8 @@ return [
     'db' => [
         'host' => '127.0.0.1',
         'port' => 3306,
-        'name' => 'eddisfac',
-        'user' => 'eddisfac',
+        'name' => 'feddis',
+        'user' => 'feddis',
         'pass' => 'cambiar',
     ],
     // Base del sistema de gestión Eddis, para buscar usuarios a habilitar (solo lectura).
