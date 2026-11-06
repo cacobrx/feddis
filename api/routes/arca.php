@@ -28,9 +28,10 @@ route('GET', '/arca/consultar', function () {
     // Con real=1 se consulta ARCA aunque el CUIT tenga la autorización simulada.
     $simulado = arca_simulado($cuit) && !v_bool($_GET, 'real');
     $forzarReal = arca_simulado($cuit) && !$simulado;
-    if ($forzarReal) {
-        // Un CUIT simulado tiene "homologación" solo como valor por defecto: en la consulta real
-        // el ambiente lo elige quien consulta (producción salvo que pida homologacion=1).
+    if (!$simulado) {
+        // En toda consulta real el ambiente lo elige quien consulta: producción salvo que pida homologacion=1.
+        // La marca "homologación" del CUIT viene activada por defecto y con un certificado de producción
+        // ARCA responde "cms.cert.untrusted", así que no se usa para consultar.
         $cuit['modo_prueba'] = v_bool($_GET, 'homologacion');
     }
 

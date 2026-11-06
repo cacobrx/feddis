@@ -20,6 +20,8 @@ export default function ConsultaArca() {
   const tipoActual = tipo || meta.data?.tipos[0]?.codigo || ''
   // Si el CUIT autoriza en forma simulada, se puede pedir igual la consulta en ARCA real.
   const forzarReal = !!meta.data?.arca_simulado && real
+  // Consulta contra ARCA (CUIT real o simulado forzado): el ambiente se elige acá.
+  const consultaReal = !!meta.data && (!meta.data.arca_simulado || real)
 
   const consultar = async (e) => {
     e.preventDefault()
@@ -27,7 +29,7 @@ export default function ConsultaArca() {
     setError(null)
     setLlamadasError(null)
     try {
-      setRes(await api.get('/arca/consultar', { centro_id: centroId, tipo: tipoActual, numero, ...(forzarReal ? { real: 1, homologacion: ambiente === 'homologacion' ? 1 : 0 } : {}) }))
+      setRes(await api.get('/arca/consultar', { centro_id: centroId, tipo: tipoActual, numero, ...(forzarReal ? { real: 1 } : {}), ...(consultaReal ? { homologacion: ambiente === 'homologacion' ? 1 : 0 } : {}) }))
     } catch (err) {
       setError(err.message)
       setLlamadasError(err.data?.llamadas ?? null)
@@ -53,26 +55,29 @@ export default function ConsultaArca() {
             CUIT {fmtCuit(meta.data.cuit)} · {CONDICION_IVA[meta.data.condicion_iva]} · punto de venta {meta.data.punto_venta}
             {meta.data.arca_simulado && !forzarReal
               ? ' · autorización simulada: se consultan los comprobantes simulados de este sistema'
-              : (forzarReal ? ambiente === 'homologacion' : meta.data.modo_prueba) ? ' · consulta en homologación' : ' · consulta en ARCA (producción)'}
+              : ambiente === 'homologacion' ? ' · consulta en homologación' : ' · consulta en ARCA (producción)'}
           </p>
           {meta.data.arca_simulado && (
             <div style={{ marginBottom: 12 }}>
               <Switch checked={real} onChange={(x) => { setReal(x); setRes(null); setError(null); setLlamadasError(null) }}
                 label="Consultar en ARCA real los comprobantes no simulados (con el CUIT, punto de venta y certificado de esta sede)" />
-              {real && (
-                <div style={{ marginTop: 8, maxWidth: 260 }}>
-                  <Field label="Ambiente de ARCA" htmlFor="a-amb">
-                    <select id="a-amb" className="select" value={ambiente} onChange={(e) => { setAmbiente(e.target.value); setRes(null); setError(null); setLlamadasError(null) }}>
-                      <option value="produccion">Producción</option>
-                      <option value="homologacion">Homologación</option>
-                    </select>
-                  </Field>
-                </div>
-              )}
               {real && !meta.data.tiene_certificado && (
                 <div style={{ marginTop: 8 }}><Alert kind="warn">El CUIT de esta sede no tiene el certificado ARCA (.crt y .key) cargado: la consulta se hará con el certificado que tiene la API en su servidor.</Alert></div>
               )}
             </div>
+          )}
+          {consultaReal && (
+            <div style={{ marginBottom: 12, maxWidth: 260 }}>
+              <Field label="Ambiente de ARCA" htmlFor="a-amb">
+                <select id="a-amb" className="select" value={ambiente} onChange={(e) => { setAmbiente(e.target.value); setRes(null); setError(null); setLlamadasError(null) }}>
+                  <option value="produccion">Producción</option>
+                  <option value="homologacion">Homologación</option>
+                </select>
+              </Field>
+            </div>
+          )}
+          {!meta.data.arca_simulado && meta.data.modo_prueba && (
+            <div style={{ marginBottom: 12 }}><Alert kind="warn">Este CUIT autoriza en ARCA real pero tiene marcada <strong>Homologación</strong> en Utilidades → CUIT: las facturas que emita irán al entorno de prueba, sin validez fiscal. Si factura en producción, desmarcala.</Alert></div>
           )}
           <form className="filters" onSubmit={consultar}>
             <Field label="Tipo de comprobante" className="wide" htmlFor="a-tipo">
