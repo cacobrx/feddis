@@ -313,6 +313,36 @@ function arca_payload_consulta(array $cuit, bool $exigirCertificado): array
 }
 
 /**
+ * Registro de las llamadas a la API de consulta hechas en este pedido (lo ve el staff en Consulta ARCA).
+ * Del pedido se ocultan el certificado y la clave privada; la respuesta se guarda tal cual llegó.
+ */
+function arca_consulta_log(?array $entrada = null): array
+{
+    static $log = [];
+    if ($entrada !== null) $log[] = $entrada;
+    return $log;
+}
+
+function arca_consulta_llamar(array $payload): array
+{
+    $enviado = $payload;
+    if (isset($enviado['certificado'])) $enviado['certificado'] = ['crt' => '[certificado]', 'key' => '[oculto]'];
+    $url = conf('url_arca_consulta');
+    $inicio = microtime(true);
+    try {
+        $r = http_json('POST', $url, conf('token_arca_consulta'), $payload);
+    } catch (ExternalApiError $e) {
+        arca_consulta_log(['url' => $url, 'pedido' => $enviado, 'error' => $e->getMessage(), 'ms' => (int)round((microtime(true) - $inicio) * 1000)]);
+        throw $e;
+    }
+    $status = $r['_http_status'] ?? null;
+    $respuesta = $r;
+    unset($respuesta['_http_status']);
+    arca_consulta_log(['url' => $url, 'pedido' => $enviado, 'http_status' => $status, 'respuesta' => $respuesta, 'ms' => (int)round((microtime(true) - $inicio) * 1000)]);
+    return $r;
+}
+
+/**
  * $forzarReal: consulta en ARCA aunque el CUIT tenga la autorización simulada
  * (para ver comprobantes reales emitidos por otro sistema). En ese caso el certificado es obligatorio.
  */
@@ -333,7 +363,7 @@ function api_arca_consultar(array $cuit, int $tipo, int $numero, bool $forzarRea
     }
     exigir_url_arca_consulta();
     $payload = ['accion' => 'consultar'] + arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo, 'numero' => $numero];
-    $r = http_json('POST', conf('url_arca_consulta'), conf('token_arca_consulta'), $payload);
+    $r = arca_consulta_llamar($payload);
     return ['encontrado' => (bool)($r['encontrado'] ?? false), 'comprobante' => $r['comprobante'] ?? null];
 }
 
@@ -346,7 +376,7 @@ function api_arca_ultimo(array $cuit, int $tipo, bool $forzarReal = false): int
     }
     exigir_url_arca_consulta();
     $payload = ['accion' => 'ultimo'] + arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo];
-    $r = http_json('POST', conf('url_arca_consulta'), conf('token_arca_consulta'), $payload);
+    $r = arca_consulta_llamar($payload);
     return (int)($r['numero'] ?? 0);
 }
 

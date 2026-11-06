@@ -6,13 +6,14 @@ import { Alert, Button, Empty, Field, Loading, PageHead, Switch, useApi } from '
 import { CONDICION_IVA, fmtCuit, fmtDate, fmtMoney, fmtNumero } from '../lib/format'
 
 export default function ConsultaArca() {
-  const { centro, centroId } = useSession()
+  const { centro, centroId, esStaff } = useSession()
   const meta = useApi('/arca/tipos', { centro_id: centroId })
   const [tipo, setTipo] = useState('')
   const [numero, setNumero] = useState('')
   const [real, setReal] = useState(false)
   const [res, setRes] = useState(null)
   const [error, setError] = useState(null)
+  const [llamadasError, setLlamadasError] = useState(null)
   const [busy, setBusy] = useState(false)
 
   const tipoActual = tipo || meta.data?.tipos[0]?.codigo || ''
@@ -23,10 +24,12 @@ export default function ConsultaArca() {
     e.preventDefault()
     setBusy(true)
     setError(null)
+    setLlamadasError(null)
     try {
       setRes(await api.get('/arca/consultar', { centro_id: centroId, tipo: tipoActual, numero, ...(forzarReal ? { real: 1 } : {}) }))
     } catch (err) {
       setError(err.message)
+      setLlamadasError(err.data?.llamadas ?? null)
       setRes(null)
     } finally {
       setBusy(false)
@@ -53,7 +56,7 @@ export default function ConsultaArca() {
           </p>
           {meta.data.arca_simulado && (
             <div style={{ marginBottom: 12 }}>
-              <Switch checked={real} onChange={(x) => { setReal(x); setRes(null); setError(null) }}
+              <Switch checked={real} onChange={(x) => { setReal(x); setRes(null); setError(null); setLlamadasError(null) }}
                 label="Consultar en ARCA real los comprobantes no simulados (con el CUIT, punto de venta y certificado de esta sede)" />
               {real && !meta.data.tiene_certificado && (
                 <div style={{ marginTop: 8 }}><Alert kind="warn">El CUIT de esta sede no tiene el certificado ARCA cargado. Subilo en Utilidades → CUIT para poder consultar.</Alert></div>
@@ -73,6 +76,7 @@ export default function ConsultaArca() {
       )}
 
       {error && <Alert kind="bad">{error}</Alert>}
+      {esStaff && llamadasError?.length > 0 && <RespuestaApi llamadas={llamadasError} />}
       {res && (
         <section className="panel">
           <div className="panel-head">
@@ -104,6 +108,38 @@ export default function ConsultaArca() {
           )}
         </section>
       )}
+      {esStaff && res && (res.llamadas?.length > 0
+        ? <RespuestaApi llamadas={res.llamadas} />
+        : <p className="muted small" style={{ marginTop: 12 }}>Consulta simulada: no se llamó a la API de consulta.</p>)}
     </div>
+  )
+}
+
+/** Solo staff: lo que se envió a la API de consulta y lo que respondió, tal cual. */
+function RespuestaApi({ llamadas }) {
+  const pre = { margin: 0, padding: 12, background: 'var(--bg)', borderRadius: 8, fontSize: 12, lineHeight: 1.45, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <div className="panel-head">
+        <h2>Respuesta de la API</h2>
+        <span className="badge">Solo staff</span>
+      </div>
+      <div className="panel-body" style={{ display: 'grid', gap: 16 }}>
+        {llamadas.map((l, i) => (
+          <div key={i} style={{ display: 'grid', gap: 8 }}>
+            <div className="small">
+              <strong>{l.pedido?.accion ?? 'llamada'}</strong>
+              <span className="muted"> · POST {l.url}{l.http_status != null ? ` · HTTP ${l.http_status}` : ''} · {l.ms} ms</span>
+            </div>
+            {l.error && <Alert kind="bad">{l.error}</Alert>}
+            <details>
+              <summary className="small muted" style={{ cursor: 'pointer' }}>Pedido enviado</summary>
+              <pre style={{ ...pre, marginTop: 6 }}>{JSON.stringify(l.pedido, null, 2)}</pre>
+            </details>
+            {'respuesta' in l && <pre style={pre}>{JSON.stringify(l.respuesta, null, 2)}</pre>}
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }

@@ -29,10 +29,15 @@ route('GET', '/arca/consultar', function () {
     $simulado = arca_simulado($cuit) && !v_bool($_GET, 'real');
     $forzarReal = arca_simulado($cuit) && !$simulado;
 
-    $ultimo = api_arca_ultimo($cuit, $tipo, $forzarReal);
-    $resultado = null;
+    try {
+        $ultimo = api_arca_ultimo($cuit, $tipo, $forzarReal);
+        $resultado = $numero !== null ? api_arca_consultar($cuit, $tipo, $numero, $forzarReal) : null;
+    } catch (ExternalApiError $e) {
+        // El staff ve también qué se envió y qué respondió la API, para diagnosticar.
+        if ($u['es_staff']) throw new HttpError(502, $e->getMessage(), ['externo' => true, 'llamadas' => arca_consulta_log()]);
+        throw $e;
+    }
     if ($numero !== null) {
-        $resultado = api_arca_consultar($cuit, $tipo, $numero, $forzarReal);
         if (!empty($resultado['comprobante'])) {
             $local = q_one('SELECT id, receptor_nombre, estado FROM comprobante WHERE cuit_id = ? AND punto_venta = ? AND tipo = ? AND numero = ? AND modo_prueba = ? AND simulado = ?',
                 [$cuit['id'], $cuit['punto_venta'], $tipo, $numero, (int)$cuit['modo_prueba'], $simulado ? 1 : 0]);
@@ -51,5 +56,7 @@ route('GET', '/arca/consultar', function () {
         'arca_simulado' => $simulado,
         'ultimo_numero' => $ultimo,
         'resultado' => $resultado,
+        // Solo para staff: pedidos y respuestas crudas de la API de consulta (vacío si la consulta fue simulada).
+        'llamadas' => $u['es_staff'] ? arca_consulta_log() : null,
     ];
 });
