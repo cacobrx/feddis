@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Plus, Pencil, Trash2, RotateCcw } from 'lucide-react'
+import { Plus, Pencil, Trash2, RotateCcw, FileKey2 } from 'lucide-react'
 import { useSession } from '../context/Session'
 import { api } from '../lib/api'
 import { Alert, Button, Confirm, Empty, Field, Loading, Modal, PageHead, Switch, useAction, useApi, useForm } from '../components/ui'
@@ -15,6 +15,7 @@ export default function Cuit() {
   const { data, loading, error, reload } = useApi('/cuits')
   const [edit, setEdit] = useState(null)
   const [borrar, setBorrar] = useState(null)
+  const [cert, setCert] = useState(null)
   const [run] = useAction()
 
   const done = () => { reload(); refresh() }
@@ -49,7 +50,7 @@ export default function Cuit() {
                       <td>{CONDICION_IVA[c.condicion_iva]}{c.condicion_iva === 'RI' && <div className="small muted">IVA {c.alicuota}%</div>}</td>
                       <td className="num">{c.punto_venta}</td>
                       <td className="num">{fmtMoney(c.tope_facturacion)}</td>
-                      <td className="nowrap">{fmtDate(c.venc_certificado)}{dias !== null && dias <= 30 && <div className="small" style={{ color: dias < 0 ? 'var(--bad)' : 'var(--warn)' }}>{dias < 0 ? 'Vencido' : `Vence en ${dias} d`}</div>}</td>
+                      <td className="nowrap">{fmtDate(c.venc_certificado)}{!c.certificado && <div className="small muted">Sin archivos</div>}{dias !== null && dias <= 30 && <div className="small" style={{ color: dias < 0 ? 'var(--bad)' : 'var(--warn)' }}>{dias < 0 ? 'Vencido' : `Vence en ${dias} d`}</div>}</td>
                       <td>{!c.activo ? <span className="badge">Inactivo</span> : (
                         <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
                           {c.arca_simulado ? <span className="badge badge-warn">Simulada</span> : <span className="badge badge-ok">Real</span>}
@@ -59,6 +60,7 @@ export default function Cuit() {
                       {esStaff && <td>{c.importar_cuota_99 ? 'Importa' : <span className="muted">No</span>}</td>}
                       <td className="nowrap" style={{ textAlign: 'right' }}>
                         <button className="icon-btn" onClick={() => setEdit({ ...VACIO, ...c, alicuota: String(c.alicuota), tope_facturacion: String(c.tope_facturacion), inicio_actividades: c.inicio_actividades ?? '', venc_certificado: c.venc_certificado ?? '', ingresos_brutos: c.ingresos_brutos ?? '' })} aria-label="Editar" title="Editar"><Pencil size={16} /></button>
+                        <button className="icon-btn" onClick={() => setCert(c)} aria-label="Certificado ARCA" title="Certificado ARCA (.crt y .key)"><FileKey2 size={16} /></button>
                         {esStaff && (c.activo
                           ? <button className="icon-btn" onClick={() => setBorrar(c)} aria-label="Dar de baja" title="Dar de baja"><Trash2 size={16} /></button>
                           : <button className="icon-btn" onClick={async () => { if (await run(() => api.post(`/cuits/${c.id}/reactivar`), 'CUIT reactivado.')) done() }} aria-label="Reactivar" title="Reactivar"><RotateCcw size={16} /></button>)}
@@ -73,6 +75,7 @@ export default function Cuit() {
       </section>
 
       {edit && <CuitForm inicial={edit} existentes={data ?? []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); done() }} />}
+      {cert && <CertificadoModal cuit={cert} onClose={() => setCert(null)} onSaved={() => { setCert(null); done() }} />}
       {borrar && (
         <Confirm title="Dar de baja el CUIT" danger confirmLabel="Dar de baja" onClose={() => setBorrar(null)}
           onConfirm={async () => { if (await run(() => api.del(`/cuits/${borrar.id}`), (r) => r.desactivado ? 'El CUIT tiene comprobantes: quedó inactivo.' : 'CUIT eliminado.')) done() }}
@@ -165,7 +168,11 @@ function CuitForm({ inicial, existentes, onClose, onSaved }) {
         {f('ingresos_brutos', 'Ingresos Brutos (n.º)', { placeholder: 'Se imprime en el comprobante' })}
         {f('punto_venta', 'Punto de venta', { type: 'number', min: 1, required: true })}
         {f('inicio_actividades', 'Inicio de actividades', { type: 'date' })}
-        {f('venc_certificado', 'Vencimiento del certificado ARCA', { type: 'date' })}
+        {inicial.certificado
+          ? <Field label="Vencimiento del certificado ARCA" hint="Se toma del certificado cargado." htmlFor="cu-venc_certificado">
+              <input id="cu-venc_certificado" className="input" type="date" value={v.venc_certificado ?? ''} disabled />
+            </Field>
+          : f('venc_certificado', 'Vencimiento del certificado ARCA', { type: 'date' })}
         <Field label="Tope de facturación mensual ($)" error={errors.tope_facturacion} htmlFor="cu-tope">
           <input id="cu-tope" className="input" type="number" step="0.01" min="0" value={v.tope_facturacion} onChange={set('tope_facturacion')} required />
         </Field>
@@ -187,6 +194,77 @@ function CuitForm({ inicial, existentes, onClose, onSaved }) {
           {esStaff && <Switch checked={v.importar_cuota_99} onChange={set('importar_cuota_99')} label="Importar cuota 99 (derecho de examen) en Pagos" />}
         </div>
       </form>
+    </Modal>
+  )
+}
+
+const leerBase64 = (file) => new Promise((resolve, reject) => {
+  const r = new FileReader()
+  r.onload = () => resolve(String(r.result).split(',')[1] ?? '')
+  r.onerror = () => reject(new Error(`No se pudo leer ${file.name}.`))
+  r.readAsDataURL(file)
+})
+
+function CertificadoModal({ cuit, onClose, onSaved }) {
+  const [crt, setCrt] = useState(null)
+  const [key, setKey] = useState(null)
+  const [claveKey, setClaveKey] = useState('')
+  const [errors, setErrors] = useState({})
+  const [quitar, setQuitar] = useState(false)
+  const [run, busy] = useAction()
+  const actual = cuit.certificado
+
+  const subir = async (e) => {
+    e.preventDefault()
+    const errs = {}
+    if (!crt) errs.crt = 'Elegí el archivo .crt.'
+    if (!key) errs.key = 'Elegí el archivo .key.'
+    setErrors(errs)
+    if (Object.keys(errs).length) return
+    const r = await run(async () => api.post(`/cuits/${cuit.id}/certificado`, {
+      crt: await leerBase64(crt), key: await leerBase64(key), clave_key: claveKey || undefined,
+    }), (r) => r.avisos?.length ? `Certificado cargado. ${r.avisos.join(' ')}` : `Certificado cargado: vence el ${fmtDate(r.hasta)}.`,
+    (err) => { if (err?.data?.campo) setErrors({ [err.data.campo]: err.message }) })
+    if (r) onSaved()
+  }
+
+  const archivo = (k, label, accept, file, setFile) => (
+    <Field label={label} error={errors[k]} hint={file ? file.name : undefined} htmlFor={`ce-${k}`}>
+      <input id={`ce-${k}`} className="input" type="file" accept={accept}
+        onChange={(e) => { setFile(e.target.files?.[0] ?? null); setErrors((s) => ({ ...s, [k]: undefined })) }} />
+    </Field>
+  )
+
+  return (
+    <Modal title={`Certificado ARCA · ${cuit.razon_social}`} onClose={onClose} footer={<>
+      {actual && <Button variant="danger" onClick={() => setQuitar(true)} style={{ marginRight: 'auto' }}>Quitar certificado</Button>}
+      <Button onClick={onClose}>Cancelar</Button>
+      <Button variant="primary" type="submit" form="cert-form" loading={busy}>{actual ? 'Reemplazar' : 'Subir certificado'}</Button>
+    </>}>
+      <form id="cert-form" onSubmit={subir} style={{ display: 'grid', gap: 14 }}>
+        {actual ? (
+          <Alert kind="info">
+            Cargado el {fmtDate(actual.subido_at?.slice(0, 10))}{actual.titular ? ` · ${actual.titular}` : ''}. Válido del {fmtDate(actual.desde)} al {fmtDate(actual.hasta)}.
+            Subí archivos nuevos para reemplazarlo.
+          </Alert>
+        ) : (
+          <p className="small muted" style={{ margin: 0 }}>
+            CUIT {fmtCuit(cuit.cuit)}. Subí el certificado que descargaste de ARCA y la clave privada con la que generaste el pedido (CSR).
+            El vencimiento se completa solo a partir del certificado.
+          </p>
+        )}
+        {archivo('crt', 'Certificado (.crt)', '.crt,.pem,.cer', crt, setCrt)}
+        {archivo('key', 'Clave privada (.key)', '.key,.pem', key, setKey)}
+        <Field label="Contraseña de la clave privada" hint="Solo si la clave está protegida con contraseña." htmlFor="ce-clave">
+          <input id="ce-clave" className="input" type="password" autoComplete="off" value={claveKey} onChange={(e) => setClaveKey(e.target.value)} />
+        </Field>
+        <p className="small muted" style={{ margin: 0 }}>La clave privada se guarda cifrada y no se puede volver a descargar.</p>
+      </form>
+      {quitar && (
+        <Confirm title="Quitar certificado" danger confirmLabel="Quitar" onClose={() => setQuitar(false)}
+          onConfirm={async () => { if (await run(() => api.del(`/cuits/${cuit.id}/certificado`), 'Certificado quitado.')) onSaved() }}
+          message="Se borran el .crt y la clave privada guardados para este CUIT. La fecha de vencimiento queda como estaba." />
+      )}
     </Modal>
   )
 }

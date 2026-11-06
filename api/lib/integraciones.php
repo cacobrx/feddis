@@ -250,6 +250,14 @@ function arca_simulado(array $cuit): bool
     return (int)($cuit['arca_simulado'] ?? 1) === 1;
 }
 
+/** Certificado y clave privada (PEM) cargados para el CUIT, o null si no tiene. */
+function cuit_certificado(array $cuit): ?array
+{
+    if (empty($cuit['certificado_crt']) || empty($cuit['certificado_key'])) return null;
+    $key = decrypt_secret($cuit['certificado_key']);
+    return $key === null ? null : ['crt' => $cuit['certificado_crt'], 'key' => $key];
+}
+
 function exigir_url_arca(): void
 {
     if (conf('url_arca') === '') {

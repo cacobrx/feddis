@@ -27,6 +27,12 @@ function cuit_publico(array $r, bool $staff): array
         'modo_prueba' => (bool)$r['modo_prueba'],
         'arca_simulado' => (bool)$r['arca_simulado'],
         'activo' => (bool)$r['activo'],
+        'certificado' => empty($r['certificado_crt']) ? null : [
+            'titular' => $r['certificado_titular'],
+            'desde' => $r['certificado_desde'],
+            'hasta' => $r['venc_certificado'],
+            'subido_at' => $r['certificado_subido_at'],
+        ],
     ];
     if ($staff) $out['importar_cuota_99'] = (bool)$r['importar_cuota_99'];
     return $out;
@@ -92,6 +98,8 @@ route('PUT', '/cuits/{id}', function ($p) {
     require_centro($u, $actual['centro_id']);
 
     $v = cuit_validar(body(), $u, false);
+    // Con el certificado cargado, el vencimiento sale del .crt y no se edita a mano.
+    if (!empty($actual['certificado_crt'])) $v['venc_certificado'] = $actual['venc_certificado'];
     if ($u['es_staff'] && (int)$v['centro_id'] !== (int)$actual['centro_id']
         && (int)$actual['activo'] === 1 && q_val('SELECT id FROM cuit WHERE centro_id = ? AND activo = 1 AND id <> ?', [$v['centro_id'], $actual['id']])) {
         throw new HttpError(409, 'El centro elegido ya tiene otro CUIT.', ['campo' => 'centro_id']);
@@ -147,4 +155,75 @@ route('PUT', '/cuits/{id}/tope', function ($p) {
         $actual['tope_facturacion'] = $tope;
     }
     return ['tope' => resumen_tope($actual)];
+});
+
+/* ---------- Certificado digital de ARCA (.crt + .key) ---------- */
+
+/** Acepta PEM o DER (en base64, tal como lo manda el navegador) y devuelve PEM. */
+function cert_a_pem(string $b64, string $tipo, string $label): string
+{
+    $raw = base64_decode($b64, true);
+    if ($raw === false || $raw === '') throw new HttpError(422, "No se pudo leer el archivo $label.", ['campo' => $tipo]);
+    if (strlen($raw) > 64 * 1024) throw new HttpError(422, "El archivo $label es demasiado grande para ser un certificado.", ['campo' => $tipo]);
+    if (str_contains($raw, '-----BEGIN')) return trim($raw) . "\n";
+    $cabecera = $tipo === 'crt' ? 'CERTIFICATE' : 'PRIVATE KEY';
+    return "-----BEGIN $cabecera-----\n" . chunk_split(base64_encode($raw), 64, "\n") . "-----END $cabecera-----\n";
+}
+
+route('POST', '/cuits/{id}/certificado', function ($p) {
+    $u = require_user();
+    $actual = q_one('SELECT * FROM cuit WHERE id = ?', [(int)$p['id']]);
+    if (!$actual) throw new HttpError(404, 'El CUIT no existe.');
+    require_centro($u, $actual['centro_id']);
+    $d = body();
+    if (empty($d['crt'])) throw new HttpError(422, 'Elegí el archivo del certificado (.crt).', ['campo' => 'crt']);
+    if (empty($d['key'])) throw new HttpError(422, 'Elegí el archivo de la clave privada (.key).', ['campo' => 'key']);
+
+    $crtPem = cert_a_pem((string)$d['crt'], 'crt', '.crt');
+    $keyPem = cert_a_pem((string)$d['key'], 'key', '.key');
+
+    $x509 = @openssl_x509_read($crtPem);
+    if ($x509 === false) throw new HttpError(422, 'El archivo .crt no es un certificado válido.', ['campo' => 'crt']);
+    $info = openssl_x509_parse($x509);
+    $clave = (string)($d['clave_key'] ?? '');
+    $pkey = @openssl_pkey_get_private($keyPem, $clave);
+    if ($pkey === false) {
+        throw new HttpError(422, str_contains($keyPem, 'ENCRYPTED')
+            ? ($clave === '' ? 'La clave privada está protegida con contraseña: ingresala.' : 'La contraseña de la clave privada no es correcta.')
+            : 'El archivo .key no es una clave privada válida.', ['campo' => 'key']);
+    }
+    if (!openssl_x509_check_private_key($x509, $pkey)) {
+        throw new HttpError(422, 'La clave privada no corresponde a ese certificado.', ['campo' => 'key']);
+    }
+    // Se guarda la clave sin contraseña (y cifrada con app_key), para poder usarla sin pedirla de nuevo.
+    openssl_pkey_export($pkey, $keyLimpia);
+
+    $desde = date('Y-m-d', (int)$info['validFrom_time_t']);
+    $hasta = date('Y-m-d', (int)$info['validTo_time_t']);
+    $subject = $info['subject'] ?? [];
+    $titular = substr(trim((string)($subject['CN'] ?? $subject['O'] ?? '')), 0, 200) ?: null;
+    $cuitCert = preg_replace('/\D/', '', (string)($subject['serialNumber'] ?? ''));
+
+    q('UPDATE cuit SET certificado_crt = ?, certificado_key = ?, certificado_titular = ?, certificado_desde = ?, venc_certificado = ?, certificado_subido_at = NOW() WHERE id = ?',
+        [$crtPem, encrypt_secret($keyLimpia), $titular, $desde, $hasta, $actual['id']]);
+    audit('cuit', 'certificado', ['centro_id' => (int)$actual['centro_id'], 'entidad' => 'cuit', 'entidad_id' => $actual['id'],
+        'antes' => ['venc_certificado' => $actual['venc_certificado'], 'certificado_titular' => $actual['certificado_titular']],
+        'despues' => ['venc_certificado' => $hasta, 'certificado_titular' => $titular, 'certificado_desde' => $desde]]);
+
+    $avisos = [];
+    if ($cuitCert !== '' && $cuitCert !== $actual['cuit']) $avisos[] = "El certificado es del CUIT $cuitCert, no del CUIT $actual[cuit]. Solo sirve si ese CUIT tiene delegado el servicio de facturación.";
+    if ($hasta < date('Y-m-d')) $avisos[] = 'El certificado ya está vencido.';
+    return ['ok' => true, 'titular' => $titular, 'desde' => $desde, 'hasta' => $hasta, 'avisos' => $avisos];
+});
+
+route('DELETE', '/cuits/{id}/certificado', function ($p) {
+    $u = require_user();
+    $actual = q_one('SELECT * FROM cuit WHERE id = ?', [(int)$p['id']]);
+    if (!$actual) throw new HttpError(404, 'El CUIT no existe.');
+    require_centro($u, $actual['centro_id']);
+    if (empty($actual['certificado_crt'])) return ['ok' => true, 'sin_cambios' => true];
+    q('UPDATE cuit SET certificado_crt = NULL, certificado_key = NULL, certificado_titular = NULL, certificado_desde = NULL, certificado_subido_at = NULL WHERE id = ?', [$actual['id']]);
+    audit('cuit', 'quitar_certificado', ['centro_id' => (int)$actual['centro_id'], 'entidad' => 'cuit', 'entidad_id' => $actual['id'],
+        'antes' => ['certificado_titular' => $actual['certificado_titular'], 'venc_certificado' => $actual['venc_certificado']]]);
+    return ['ok' => true];
 });
