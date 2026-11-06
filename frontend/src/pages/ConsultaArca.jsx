@@ -11,6 +11,7 @@ export default function ConsultaArca() {
   const [tipo, setTipo] = useState('')
   const [numero, setNumero] = useState('')
   const [real, setReal] = useState(false)
+  const [ambiente, setAmbiente] = useState('produccion')
   const [res, setRes] = useState(null)
   const [error, setError] = useState(null)
   const [llamadasError, setLlamadasError] = useState(null)
@@ -26,7 +27,7 @@ export default function ConsultaArca() {
     setError(null)
     setLlamadasError(null)
     try {
-      setRes(await api.get('/arca/consultar', { centro_id: centroId, tipo: tipoActual, numero, ...(forzarReal ? { real: 1 } : {}) }))
+      setRes(await api.get('/arca/consultar', { centro_id: centroId, tipo: tipoActual, numero, ...(forzarReal ? { real: 1, homologacion: ambiente === 'homologacion' ? 1 : 0 } : {}) }))
     } catch (err) {
       setError(err.message)
       setLlamadasError(err.data?.llamadas ?? null)
@@ -52,14 +53,24 @@ export default function ConsultaArca() {
             CUIT {fmtCuit(meta.data.cuit)} · {CONDICION_IVA[meta.data.condicion_iva]} · punto de venta {meta.data.punto_venta}
             {meta.data.arca_simulado && !forzarReal
               ? ' · autorización simulada: se consultan los comprobantes simulados de este sistema'
-              : meta.data.modo_prueba ? ' · consulta en homologación' : ' · consulta en ARCA (producción)'}
+              : (forzarReal ? ambiente === 'homologacion' : meta.data.modo_prueba) ? ' · consulta en homologación' : ' · consulta en ARCA (producción)'}
           </p>
           {meta.data.arca_simulado && (
             <div style={{ marginBottom: 12 }}>
               <Switch checked={real} onChange={(x) => { setReal(x); setRes(null); setError(null); setLlamadasError(null) }}
                 label="Consultar en ARCA real los comprobantes no simulados (con el CUIT, punto de venta y certificado de esta sede)" />
+              {real && (
+                <div style={{ marginTop: 8, maxWidth: 260 }}>
+                  <Field label="Ambiente de ARCA" htmlFor="a-amb">
+                    <select id="a-amb" className="select" value={ambiente} onChange={(e) => { setAmbiente(e.target.value); setRes(null); setError(null); setLlamadasError(null) }}>
+                      <option value="produccion">Producción</option>
+                      <option value="homologacion">Homologación</option>
+                    </select>
+                  </Field>
+                </div>
+              )}
               {real && !meta.data.tiene_certificado && (
-                <div style={{ marginTop: 8 }}><Alert kind="warn">El CUIT de esta sede no tiene el certificado ARCA cargado. Subilo en Utilidades → CUIT para poder consultar.</Alert></div>
+                <div style={{ marginTop: 8 }}><Alert kind="warn">El CUIT de esta sede no tiene el certificado ARCA (.crt y .key) cargado: la consulta se hará con el certificado que tiene la API en su servidor.</Alert></div>
               )}
             </div>
           )}
@@ -103,6 +114,9 @@ export default function ConsultaArca() {
                 <dt>IVA</dt><dd>{fmtMoney(c.importe_iva)}</dd>
                 <dt>Total</dt><dd><strong>{fmtMoney(c.importe_total)}</strong></dd>
               </dl>
+              {c.observaciones?.length > 0 && (
+                <div className="span-2"><Alert kind="info"><strong>Observaciones de ARCA:</strong> {c.observaciones.join(' · ')}</Alert></div>
+              )}
               {!res.resultado.local && <div className="span-2"><Alert kind="warn">Este comprobante está en ARCA pero no fue emitido desde este sistema.</Alert></div>}
             </div>
           )}
@@ -133,8 +147,12 @@ function RespuestaApi({ llamadas }) {
             </div>
             {l.error && <Alert kind="bad">{l.error}</Alert>}
             <details>
-              <summary className="small muted" style={{ cursor: 'pointer' }}>Pedido enviado</summary>
-              <pre style={{ ...pre, marginTop: 6 }}>{JSON.stringify(l.pedido, null, 2)}</pre>
+              <summary className="small muted" style={{ cursor: 'pointer' }}>Pedido enviado (incluye la clave privada)</summary>
+              <div style={{ display: 'grid', gap: 8, marginTop: 6 }}>
+                <Alert kind="warn">El pedido incluye la clave privada del certificado. Compartilo solo con quien mantiene la API y, si se expone, generá un certificado nuevo en ARCA.</Alert>
+                <div><Button size="sm" type="button" onClick={() => navigator.clipboard?.writeText(JSON.stringify(l.pedido, null, 2))}>Copiar pedido</Button></div>
+                <pre style={pre}>{JSON.stringify(l.pedido, null, 2)}</pre>
+              </div>
             </details>
             {'respuesta' in l && <pre style={pre}>{JSON.stringify(l.respuesta, null, 2)}</pre>}
           </div>

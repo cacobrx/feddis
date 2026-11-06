@@ -38,7 +38,8 @@ function simular(string $claveUrl): bool
     return simulacion() && conf($claveUrl) === '';
 }
 
-function http_json(string $method, string $url, ?string $token = null, ?array $payload = null, array $query = [], int $timeout = 0): array
+/** $jsonEnErrores: con HTTP 5xx devuelve igual el cuerpo si es JSON (para APIs que informan el error ahí). */
+function http_json(string $method, string $url, ?string $token = null, ?array $payload = null, array $query = [], int $timeout = 0, bool $jsonEnErrores = false): array
 {
     if ($url === '') throw new ExternalApiError('La URL del servicio no está configurada. Completala en Utilidades → Configuración.');
     if ($query) $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($query);
@@ -70,7 +71,7 @@ function http_json(string $method, string $url, ?string $token = null, ?array $p
         $i = strpos((string)$raw, '{');
         if ($i !== false && $i > 0) $data = json_decode(substr((string)$raw, $i), true);
     }
-    if ($status >= 500) throw new ExternalApiError("{$host} respondió con error {$status}.");
+    if ($status >= 500 && !($jsonEnErrores && is_array($data))) throw new ExternalApiError("{$host} respondió con error {$status}.");
     if (!is_array($data)) throw new ExternalApiError("{$host} devolvió una respuesta que no es JSON (HTTP {$status}).");
     $data['_http_status'] = $status;
     return $data;
@@ -243,9 +244,11 @@ function api_usuarios_disponibles(): array
  *   → { "resultado": "A"|"R", "numero", "cae", "cae_vencimiento", "errores": ["..."] }
  * Consulta (url_arca_consulta + token_arca_consulta), un único endpoint que distingue por "accion":
  * POST {url_arca_consulta}  { accion: "consultar", cuit, punto_venta, tipo, numero, homologacion, certificado{crt,key}? }
- *   → { "encontrado": bool, "comprobante": { tipo, punto_venta, numero, fecha, cae, cae_vencimiento,
- *        receptor_doc_tipo, receptor_doc_nro, importe_neto, importe_iva, importe_total, resultado } }
- * POST {url_arca_consulta}  { accion: "ultimo", cuit, punto_venta, tipo, homologacion, certificado{crt,key}? } → { "numero": N }
+ *   → { "ok": true, "error": "", "comprobante": { ...campos de WSFE FECompConsultar: CbteTipo, PtoVta, CbteDesde,
+ *        CbteFch, CodAutorizacion, FchVto, DocTipo, DocNro, ImpNeto, ImpIVA, ImpTotal, Resultado, Observaciones } }
+ * POST {url_arca_consulta}  { accion: "ultimo", cuit, punto_venta, tipo, homologacion, certificado{crt,key}? }
+ *   → { "ok": true, "error": "", "ultimo": N }
+ * Errores: HTTP 4xx y/o { "ok": false, "error": "..." }.
  * ------------------------------------------------------------------ */
 /** Cada CUIT elige si la autorización en ARCA es simulada o real (cuit.arca_simulado). */
 function arca_simulado(array $cuit): bool
@@ -294,9 +297,10 @@ function api_arca_autorizar(array $payload, bool $simulado): array
 /**
  * Datos de la sede que viajan en cada consulta real a ARCA: CUIT, punto de venta, ambiente y,
  * si el CUIT lo tiene cargado, el certificado (.crt) y su clave privada (.key) en PEM.
+ * Sin certificado cargado, el pedido va sin "certificado" y la API usa el que tiene en su servidor.
  * Se envían por POST para que la clave nunca quede en una URL ni en los logs del servidor.
  */
-function arca_payload_consulta(array $cuit, bool $exigirCertificado): array
+function arca_payload_consulta(array $cuit): array
 {
     $p = [
         'cuit' => $cuit['cuit'],
@@ -304,17 +308,14 @@ function arca_payload_consulta(array $cuit, bool $exigirCertificado): array
         'homologacion' => (int)$cuit['modo_prueba'] === 1 ? 1 : 0,
     ];
     $cert = cuit_certificado($cuit);
-    if ($cert) {
-        $p['certificado'] = ['crt' => $cert['crt'], 'key' => $cert['key']];
-    } elseif ($exigirCertificado) {
-        throw new HttpError(422, 'El CUIT de la sede no tiene el certificado ARCA (.crt y .key) cargado. Subilo en Utilidades → CUIT.');
-    }
+    if ($cert) $p['certificado'] = ['crt' => $cert['crt'], 'key' => $cert['key']];
     return $p;
 }
 
 /**
  * Registro de las llamadas a la API de consulta hechas en este pedido (lo ve el staff en Consulta ARCA).
- * Del pedido se ocultan el certificado y la clave privada; la respuesta se guarda tal cual llegó.
+ * El pedido se muestra completo, con el certificado y la clave privada, para poder pasárselo a quien
+ * mantiene la API y que reproduzca el error. Solo llega a usuarios staff y no se guarda en la auditoría.
  */
 function arca_consulta_log(?array $entrada = null): array
 {
@@ -326,11 +327,10 @@ function arca_consulta_log(?array $entrada = null): array
 function arca_consulta_llamar(array $payload): array
 {
     $enviado = $payload;
-    if (isset($enviado['certificado'])) $enviado['certificado'] = ['crt' => '[certificado]', 'key' => '[oculto]'];
     $url = conf('url_arca_consulta');
     $inicio = microtime(true);
     try {
-        $r = http_json('POST', $url, conf('token_arca_consulta'), $payload);
+        $r = http_json('POST', $url, conf('token_arca_consulta'), $payload, [], 0, true);
     } catch (ExternalApiError $e) {
         arca_consulta_log(['url' => $url, 'pedido' => $enviado, 'error' => $e->getMessage(), 'ms' => (int)round((microtime(true) - $inicio) * 1000)]);
         throw $e;
@@ -339,12 +339,18 @@ function arca_consulta_llamar(array $payload): array
     $respuesta = $r;
     unset($respuesta['_http_status']);
     arca_consulta_log(['url' => $url, 'pedido' => $enviado, 'http_status' => $status, 'respuesta' => $respuesta, 'ms' => (int)round((microtime(true) - $inicio) * 1000)]);
+    // La API informa sus errores con HTTP 4xx y/o { "ok": false, "error": "..." }: no se toman como respuesta válida.
+    if (($status !== null && $status >= 400) || (array_key_exists('ok', $r) && $r['ok'] === false)) {
+        $detalle = $r['error'] ?? $r['mensaje'] ?? null;
+        $detalle = is_array($detalle) ? implode(' · ', array_map('strval', $detalle)) : (string)($detalle ?? '');
+        throw new ExternalApiError('La API de consulta ARCA respondió con error' . ($status ? " (HTTP {$status})" : '') . ': ' . ($detalle !== '' ? $detalle : 'sin detalle') . '.');
+    }
     return $r;
 }
 
 /**
  * $forzarReal: consulta en ARCA aunque el CUIT tenga la autorización simulada
- * (para ver comprobantes reales emitidos por otro sistema). En ese caso el certificado es obligatorio.
+ * (para ver comprobantes reales emitidos por otro sistema). Si el CUIT no tiene certificado, la API usa el de su servidor.
  */
 function api_arca_consultar(array $cuit, int $tipo, int $numero, bool $forzarReal = false): array
 {
@@ -362,9 +368,58 @@ function api_arca_consultar(array $cuit, int $tipo, int $numero, bool $forzarRea
         ]];
     }
     exigir_url_arca_consulta();
-    $payload = ['accion' => 'consultar'] + arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo, 'numero' => $numero];
-    $r = arca_consulta_llamar($payload);
-    return ['encontrado' => (bool)($r['encontrado'] ?? false), 'comprobante' => $r['comprobante'] ?? null];
+    $payload = ['accion' => 'consultar'] + arca_payload_consulta($cuit) + ['tipo' => $tipo, 'numero' => $numero];
+    try {
+        $r = arca_consulta_llamar($payload);
+    } catch (ExternalApiError $e) {
+        // 602 de WSFE: "No existen datos en nuestros registros para los parametros ingresados".
+        $ultima = arca_consulta_log();
+        $resp = end($ultima)['respuesta'] ?? [];
+        if ((string)($resp['coderror'] ?? '') === '602') return ['encontrado' => false];
+        throw $e;
+    }
+    $c = $r['comprobante'] ?? null;
+    $encontrado = array_key_exists('encontrado', $r) ? (bool)$r['encontrado'] : (is_array($c) && $c !== []);
+    return ['encontrado' => $encontrado, 'comprobante' => $encontrado && is_array($c) ? arca_normalizar_comprobante($c) : null];
+}
+
+/** Fecha de WSFE (AAAAMMDD) a AAAA-MM-DD; deja igual una fecha que ya viene con guiones. */
+function arca_fecha(mixed $f): ?string
+{
+    $f = trim((string)($f ?? ''));
+    if ($f === '') return null;
+    return preg_match('/^(\d{4})(\d{2})(\d{2})$/', $f, $m) ? "{$m[1]}-{$m[2]}-{$m[3]}" : substr($f, 0, 10);
+}
+
+/**
+ * La API de consulta devuelve el comprobante con los campos de WSFE (FECompConsultar: CbteDesde, CbteFch,
+ * CodAutorizacion, ImpTotal…). Se pasa al formato del sistema; si ya viene en ese formato, se respeta.
+ */
+function arca_normalizar_comprobante(array $c): array
+{
+    $v = fn(string $propio, string $wsfe) => $c[$propio] ?? $c[$wsfe] ?? null;
+    $obs = [];
+    $o = $c['Observaciones']['Obs'] ?? null;
+    if (is_array($o)) {
+        foreach (isset($o['Msg']) ? [$o] : $o as $x) {
+            if (is_array($x) && isset($x['Msg'])) $obs[] = trim((isset($x['Code']) ? $x['Code'] . ': ' : '') . $x['Msg']);
+        }
+    }
+    return [
+        'tipo' => (int)$v('tipo', 'CbteTipo'),
+        'punto_venta' => (int)$v('punto_venta', 'PtoVta'),
+        'numero' => (int)($c['numero'] ?? $c['CbteDesde'] ?? 0),
+        'fecha' => arca_fecha($v('fecha', 'CbteFch')),
+        'cae' => (string)($v('cae', 'CodAutorizacion') ?? ''),
+        'cae_vencimiento' => arca_fecha($v('cae_vencimiento', 'FchVto')),
+        'receptor_doc_tipo' => (int)$v('receptor_doc_tipo', 'DocTipo'),
+        'receptor_doc_nro' => (string)($v('receptor_doc_nro', 'DocNro') ?? ''),
+        'importe_neto' => (float)$v('importe_neto', 'ImpNeto'),
+        'importe_iva' => (float)$v('importe_iva', 'ImpIVA'),
+        'importe_total' => (float)$v('importe_total', 'ImpTotal'),
+        'resultado' => (string)($v('resultado', 'Resultado') ?? ''),
+        'observaciones' => $c['observaciones'] ?? $obs,
+    ];
 }
 
 function api_arca_ultimo(array $cuit, int $tipo, bool $forzarReal = false): int
@@ -375,9 +430,9 @@ function api_arca_ultimo(array $cuit, int $tipo, bool $forzarReal = false): int
             [$cuit['id'], $cuit['punto_venta'], $tipo, $homolog ? 1 : 0]);
     }
     exigir_url_arca_consulta();
-    $payload = ['accion' => 'ultimo'] + arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo];
+    $payload = ['accion' => 'ultimo'] + arca_payload_consulta($cuit) + ['tipo' => $tipo];
     $r = arca_consulta_llamar($payload);
-    return (int)($r['numero'] ?? 0);
+    return (int)($r['numero'] ?? $r['ultimo'] ?? 0);
 }
 
 /* ---------- Simulación ---------- */

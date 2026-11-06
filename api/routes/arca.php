@@ -28,6 +28,11 @@ route('GET', '/arca/consultar', function () {
     // Con real=1 se consulta ARCA aunque el CUIT tenga la autorización simulada.
     $simulado = arca_simulado($cuit) && !v_bool($_GET, 'real');
     $forzarReal = arca_simulado($cuit) && !$simulado;
+    if ($forzarReal) {
+        // Un CUIT simulado tiene "homologación" solo como valor por defecto: en la consulta real
+        // el ambiente lo elige quien consulta (producción salvo que pida homologacion=1).
+        $cuit['modo_prueba'] = v_bool($_GET, 'homologacion');
+    }
 
     try {
         $ultimo = api_arca_ultimo($cuit, $tipo, $forzarReal);
