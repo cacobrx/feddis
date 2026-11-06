@@ -240,9 +240,9 @@ function api_usuarios_disponibles(): array
  * ARCA (a través de la API que resuelve WSAA/WSFE)
  * POST {url_arca}/autorizar  { cuit, punto_venta, tipo, concepto, fecha, receptor{...}, importes{...}, asociado{...}, homologacion }
  *   → { "resultado": "A"|"R", "numero", "cae", "cae_vencimiento", "errores": ["..."] }
- * GET  {url_arca}/consultar?cuit&punto_venta&tipo&numero&homologacion
+ * POST {url_arca}/consultar  { cuit, punto_venta, tipo, numero, homologacion, certificado{crt,key}? }
  *   → { "encontrado": bool, "comprobante": { ... } }
- * GET  {url_arca}/ultimo?cuit&punto_venta&tipo&homologacion → { "numero": N }
+ * POST {url_arca}/ultimo     { cuit, punto_venta, tipo, homologacion, certificado{crt,key}? } → { "numero": N }
  * ------------------------------------------------------------------ */
 /** Cada CUIT elige si la autorización en ARCA es simulada o real (cuit.arca_simulado). */
 function arca_simulado(array $cuit): bool
@@ -261,7 +261,7 @@ function cuit_certificado(array $cuit): ?array
 function exigir_url_arca(): void
 {
     if (conf('url_arca') === '') {
-        throw new ExternalApiError('El CUIT usa autorización real, pero falta la URL de la API de ARCA en Utilidades → Configuración.');
+        throw new ExternalApiError('Para consultar o autorizar en ARCA real falta la URL de la API de ARCA en Utilidades → Configuración.');
     }
 }
 
@@ -281,10 +281,35 @@ function api_arca_autorizar(array $payload, bool $simulado): array
     ];
 }
 
-function api_arca_consultar(array $cuit, int $tipo, int $numero): array
+/**
+ * Datos de la sede que viajan en cada consulta real a ARCA: CUIT, punto de venta, ambiente y,
+ * si el CUIT lo tiene cargado, el certificado (.crt) y su clave privada (.key) en PEM.
+ * Se envían por POST para que la clave nunca quede en una URL ni en los logs del servidor.
+ */
+function arca_payload_consulta(array $cuit, bool $exigirCertificado): array
+{
+    $p = [
+        'cuit' => $cuit['cuit'],
+        'punto_venta' => (int)$cuit['punto_venta'],
+        'homologacion' => (int)$cuit['modo_prueba'] === 1 ? 1 : 0,
+    ];
+    $cert = cuit_certificado($cuit);
+    if ($cert) {
+        $p['certificado'] = ['crt' => $cert['crt'], 'key' => $cert['key']];
+    } elseif ($exigirCertificado) {
+        throw new HttpError(422, 'El CUIT de la sede no tiene el certificado ARCA (.crt y .key) cargado. Subilo en Utilidades → CUIT.');
+    }
+    return $p;
+}
+
+/**
+ * $forzarReal: consulta en ARCA aunque el CUIT tenga la autorización simulada
+ * (para ver comprobantes reales emitidos por otro sistema). En ese caso el certificado es obligatorio.
+ */
+function api_arca_consultar(array $cuit, int $tipo, int $numero, bool $forzarReal = false): array
 {
     $homolog = (int)$cuit['modo_prueba'] === 1;
-    if (arca_simulado($cuit)) {
+    if (!$forzarReal && arca_simulado($cuit)) {
         $c = q_one('SELECT * FROM comprobante WHERE cuit_id = ? AND tipo = ? AND numero = ? AND modo_prueba = ? AND simulado = 1 AND estado = "AUTORIZADO"',
             [$cuit['id'], $tipo, $numero, $homolog ? 1 : 0]);
         if (!$c) return ['encontrado' => false];
@@ -297,23 +322,21 @@ function api_arca_consultar(array $cuit, int $tipo, int $numero): array
         ]];
     }
     exigir_url_arca();
-    $r = http_json('GET', rtrim(conf('url_arca'), '/') . '/consultar', conf('token_arca'), null, [
-        'cuit' => $cuit['cuit'], 'punto_venta' => $cuit['punto_venta'], 'tipo' => $tipo, 'numero' => $numero, 'homologacion' => $homolog ? 1 : 0,
-    ]);
+    $payload = arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo, 'numero' => $numero];
+    $r = http_json('POST', rtrim(conf('url_arca'), '/') . '/consultar', conf('token_arca'), $payload);
     return ['encontrado' => (bool)($r['encontrado'] ?? false), 'comprobante' => $r['comprobante'] ?? null];
 }
 
-function api_arca_ultimo(array $cuit, int $tipo): int
+function api_arca_ultimo(array $cuit, int $tipo, bool $forzarReal = false): int
 {
     $homolog = (int)$cuit['modo_prueba'] === 1;
-    if (arca_simulado($cuit)) {
+    if (!$forzarReal && arca_simulado($cuit)) {
         return (int)q_val('SELECT COALESCE(MAX(numero),0) FROM comprobante WHERE cuit_id = ? AND punto_venta = ? AND tipo = ? AND modo_prueba = ? AND simulado = 1',
             [$cuit['id'], $cuit['punto_venta'], $tipo, $homolog ? 1 : 0]);
     }
     exigir_url_arca();
-    $r = http_json('GET', rtrim(conf('url_arca'), '/') . '/ultimo', conf('token_arca'), null, [
-        'cuit' => $cuit['cuit'], 'punto_venta' => $cuit['punto_venta'], 'tipo' => $tipo, 'homologacion' => $homolog ? 1 : 0,
-    ]);
+    $payload = arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo];
+    $r = http_json('POST', rtrim(conf('url_arca'), '/') . '/ultimo', conf('token_arca'), $payload);
     return (int)($r['numero'] ?? 0);
 }
 
