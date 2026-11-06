@@ -10,13 +10,28 @@ const VACIO = {
   ingresos_brutos: '', alicuota: '0', punto_venta: '', inicio_actividades: '', venc_certificado: '', tope_facturacion: '', modo_prueba: true, arca_simulado: true, importar_cuota_99: false,
 }
 
+// Minúsculas y sin acentos, para buscar sin importar cómo se escribió.
+const norm = (t) => String(t ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+/** Coincide por razón social, nombre de fantasía, CUIT (con o sin guiones) o centro. */
+function coincide(c, q) {
+  const texto = norm(q).trim()
+  if (!texto) return true
+  const digitos = texto.replace(/\D/g, '')
+  if (digitos && digitos === texto.replace(/[\s-]/g, '') && String(c.cuit).includes(digitos)) return true
+  const campos = norm([c.razon_social, c.nombre_fantasia, c.centro_nombre, c.cuit, fmtCuit(c.cuit)].join(' '))
+  return texto.split(/\s+/).every((p) => campos.includes(p))
+}
+
 export default function Cuit() {
   const { esStaff, refresh } = useSession()
   const { data, loading, error, reload } = useApi('/cuits')
   const [edit, setEdit] = useState(null)
   const [borrar, setBorrar] = useState(null)
   const [cert, setCert] = useState(null)
+  const [q, setQ] = useState('')
   const [run] = useAction()
+  const lista = (data ?? []).filter((c) => coincide(c, q))
 
   const done = () => { reload(); refresh() }
 
@@ -26,8 +41,17 @@ export default function Cuit() {
         {esStaff ? 'Datos fiscales de cada centro. Cada centro tiene un CUIT activo.' : 'Datos fiscales de tus centros. Mantenelos al día: se usan en cada comprobante.'}
       </PageHead>
       {error && <Alert kind="bad">{error}</Alert>}
+      {data?.length > 0 && (
+        <div className="filters">
+          <Field label="Buscar" className="wide" htmlFor="cuit-q">
+            <input id="cuit-q" className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)}
+              placeholder={esStaff ? 'Razón social, nombre de fantasía, CUIT o centro' : 'Razón social, nombre de fantasía o CUIT'} />
+          </Field>
+          {q.trim() && <p className="muted small" style={{ alignSelf: 'end', paddingBottom: 10 }}>{lista.length} de {data.length}</p>}
+        </div>
+      )}
       <section className="panel">
-        {loading && !data ? <Loading /> : !data?.length ? <Empty title="Todavía no hay CUIT cargados">{esStaff ? 'Agregá el primero para poder facturar.' : 'Pedí a un usuario staff que cargue el CUIT de tu centro.'}</Empty> : (
+        {loading && !data ? <Loading /> : !data?.length ? <Empty title="Todavía no hay CUIT cargados">{esStaff ? 'Agregá el primero para poder facturar.' : 'Pedí a un usuario staff que cargue el CUIT de tu centro.'}</Empty> : !lista.length ? <Empty title="Ningún CUIT coincide con la búsqueda">Probá con otra parte del nombre, del CUIT o del centro.</Empty> : (
           <div className="table-wrap">
             <table className="data">
               <thead>
@@ -40,7 +64,7 @@ export default function Cuit() {
                 </tr>
               </thead>
               <tbody>
-                {data.map((c) => {
+                {lista.map((c) => {
                   const dias = diasHasta(c.venc_certificado)
                   return (
                     <tr key={c.id} className={c.activo ? '' : 'is-disabled'}>
