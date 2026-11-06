@@ -11,6 +11,8 @@ const CONF_CAMPOS = [
     'token_pagos_eddis' => 'secret',
     'url_arca' => 'url',
     'token_arca' => 'secret',
+    'url_arca_consulta' => 'url',
+    'token_arca_consulta' => 'secret',
     'url_usuarios' => 'url',
     'token_usuarios' => 'secret',
     'pais_sistema' => 'text',
@@ -95,8 +97,8 @@ route('PUT', '/configuracion', function () {
 
 route('POST', '/configuracion/probar', function () {
     require_staff();
-    $servicio = v_enum(body(), 'servicio', 'Servicio', ['api_eddis', 'pagos', 'arca', 'usuarios', 'validacion_eddis', 'validacion_sb']);
-    $claveUrl = ['api_eddis' => 'url_api_eddis', 'pagos' => 'url_pagos_eddis', 'arca' => 'url_arca', 'usuarios' => 'url_usuarios',
+    $servicio = v_enum(body(), 'servicio', 'Servicio', ['api_eddis', 'pagos', 'arca', 'arca_consulta', 'usuarios', 'validacion_eddis', 'validacion_sb']);
+    $claveUrl = ['api_eddis' => 'url_api_eddis', 'pagos' => 'url_pagos_eddis', 'arca' => 'url_arca', 'arca_consulta' => 'url_arca_consulta', 'usuarios' => 'url_usuarios',
                  'validacion_eddis' => 'url_validacion_eddis', 'validacion_sb' => 'url_validacion_sb'][$servicio];
     if (conf($claveUrl) === '') {
         return ['ok' => false, 'mensaje' => simulacion() ? 'Sin URL configurada: se usa la simulación.' : 'Sin URL configurada.'];
@@ -119,6 +121,9 @@ route('POST', '/configuracion/probar', function () {
                 break;
             case 'arca':
                 $r = http_json('GET', rtrim(conf('url_arca'), '/') . '/ultimo', conf('token_arca'), null, ['cuit' => '0', 'punto_venta' => 1, 'tipo' => 11, 'homologacion' => 1]);
+                break;
+            case 'arca_consulta':
+                $r = http_json('POST', conf('url_arca_consulta'), conf('token_arca_consulta'), ['accion' => 'ultimo', 'cuit' => '0', 'punto_venta' => 1, 'tipo' => 11, 'homologacion' => 1]);
                 break;
             case 'usuarios':
                 $r = http_json('GET', conf('url_usuarios'), conf('token_usuarios'));

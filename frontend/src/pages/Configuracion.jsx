@@ -26,9 +26,15 @@ const SECCIONES = [
   },
   {
     titulo: 'Facturación ARCA',
-    descripcion: 'API que autoriza y consulta comprobantes en ARCA (resuelve WSAA y WSFE). Se le agregan /autorizar, /consultar y /ultimo.',
+    descripcion: 'API que autoriza los comprobantes en ARCA (resuelve WSAA y WSFE). Se le agrega /autorizar.',
     campos: [['url_arca', 'URL base de la API de ARCA'], ['token_arca', 'Token de acceso', true]],
     probar: [['arca', 'Probar conexión']],
+  },
+  {
+    titulo: 'Consulta de comprobantes ARCA',
+    descripcion: 'API que consulta en ARCA los comprobantes emitidos y el último número autorizado (Utilidades → Consulta ARCA). Recibe por POST la acción, el CUIT, el punto de venta y el certificado de la sede.',
+    campos: [['url_arca_consulta', 'URL de la API de consulta'], ['token_arca_consulta', 'Token de acceso (opcional)', true]],
+    probar: [['arca_consulta', 'Probar conexión']],
   },
 ]
 

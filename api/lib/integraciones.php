@@ -7,7 +7,7 @@ declare(strict_types=1);
  * para poder operar el sistema completo antes de conectar los servicios reales.
  */
 
-const CONF_SECRETAS = ['token_pagos_eddis', 'token_arca', 'token_usuarios'];
+const CONF_SECRETAS = ['token_pagos_eddis', 'token_arca', 'token_arca_consulta', 'token_usuarios'];
 
 function conf_all(bool $refresh = false): array
 {
@@ -238,11 +238,14 @@ function api_usuarios_disponibles(): array
 
 /* ------------------------------------------------------------------ *
  * ARCA (a través de la API que resuelve WSAA/WSFE)
+ * Autorización (url_arca + token_arca):
  * POST {url_arca}/autorizar  { cuit, punto_venta, tipo, concepto, fecha, receptor{...}, importes{...}, asociado{...}, homologacion }
  *   → { "resultado": "A"|"R", "numero", "cae", "cae_vencimiento", "errores": ["..."] }
- * POST {url_arca}/consultar  { cuit, punto_venta, tipo, numero, homologacion, certificado{crt,key}? }
- *   → { "encontrado": bool, "comprobante": { ... } }
- * POST {url_arca}/ultimo     { cuit, punto_venta, tipo, homologacion, certificado{crt,key}? } → { "numero": N }
+ * Consulta (url_arca_consulta + token_arca_consulta), un único endpoint que distingue por "accion":
+ * POST {url_arca_consulta}  { accion: "consultar", cuit, punto_venta, tipo, numero, homologacion, certificado{crt,key}? }
+ *   → { "encontrado": bool, "comprobante": { tipo, punto_venta, numero, fecha, cae, cae_vencimiento,
+ *        receptor_doc_tipo, receptor_doc_nro, importe_neto, importe_iva, importe_total, resultado } }
+ * POST {url_arca_consulta}  { accion: "ultimo", cuit, punto_venta, tipo, homologacion, certificado{crt,key}? } → { "numero": N }
  * ------------------------------------------------------------------ */
 /** Cada CUIT elige si la autorización en ARCA es simulada o real (cuit.arca_simulado). */
 function arca_simulado(array $cuit): bool
@@ -262,6 +265,13 @@ function exigir_url_arca(): void
 {
     if (conf('url_arca') === '') {
         throw new ExternalApiError('Para consultar o autorizar en ARCA real falta la URL de la API de ARCA en Utilidades → Configuración.');
+    }
+}
+
+function exigir_url_arca_consulta(): void
+{
+    if (conf('url_arca_consulta') === '') {
+        throw new ExternalApiError('Para consultar comprobantes en ARCA falta la URL de la API de consulta en Utilidades → Configuración.');
     }
 }
 
@@ -321,9 +331,9 @@ function api_arca_consultar(array $cuit, int $tipo, int $numero, bool $forzarRea
             'resultado' => 'A',
         ]];
     }
-    exigir_url_arca();
-    $payload = arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo, 'numero' => $numero];
-    $r = http_json('POST', rtrim(conf('url_arca'), '/') . '/consultar', conf('token_arca'), $payload);
+    exigir_url_arca_consulta();
+    $payload = ['accion' => 'consultar'] + arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo, 'numero' => $numero];
+    $r = http_json('POST', conf('url_arca_consulta'), conf('token_arca_consulta'), $payload);
     return ['encontrado' => (bool)($r['encontrado'] ?? false), 'comprobante' => $r['comprobante'] ?? null];
 }
 
@@ -334,9 +344,9 @@ function api_arca_ultimo(array $cuit, int $tipo, bool $forzarReal = false): int
         return (int)q_val('SELECT COALESCE(MAX(numero),0) FROM comprobante WHERE cuit_id = ? AND punto_venta = ? AND tipo = ? AND modo_prueba = ? AND simulado = 1',
             [$cuit['id'], $cuit['punto_venta'], $tipo, $homolog ? 1 : 0]);
     }
-    exigir_url_arca();
-    $payload = arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo];
-    $r = http_json('POST', rtrim(conf('url_arca'), '/') . '/ultimo', conf('token_arca'), $payload);
+    exigir_url_arca_consulta();
+    $payload = ['accion' => 'ultimo'] + arca_payload_consulta($cuit, $forzarReal) + ['tipo' => $tipo];
+    $r = http_json('POST', conf('url_arca_consulta'), conf('token_arca_consulta'), $payload);
     return (int)($r['numero'] ?? 0);
 }
 
