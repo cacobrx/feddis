@@ -29,10 +29,11 @@ route('GET', '/arca/consultar', function () {
     $simulado = arca_simulado($cuit) && !v_bool($_GET, 'real');
     $forzarReal = arca_simulado($cuit) && !$simulado;
     if (!$simulado) {
-        // En toda consulta real el ambiente lo elige quien consulta: producción salvo que pida homologacion=1.
+        // En toda consulta real el ambiente lo elige el staff: producción salvo que pida homologacion=1.
+        // Los usuarios que no son staff consultan siempre en producción.
         // La marca "homologación" del CUIT viene activada por defecto y con un certificado de producción
         // ARCA responde "cms.cert.untrusted", así que no se usa para consultar.
-        $cuit['modo_prueba'] = v_bool($_GET, 'homologacion');
+        $cuit['modo_prueba'] = $u['es_staff'] ? v_bool($_GET, 'homologacion') : 0;
     }
 
     try {
