@@ -84,11 +84,16 @@ route('POST', '/cuits', function () {
     if (q_val('SELECT id FROM cuit WHERE centro_id = ? AND activo = 1', [$v['centro_id']])) {
         throw new HttpError(409, 'Ese centro ya tiene un CUIT activo. Editá el existente o desactivalo antes.', ['campo' => 'centro_id']);
     }
-    $cols = array_keys($v);
-    q('INSERT INTO cuit (' . implode(',', $cols) . ') VALUES ' . in_list($cols), array_values($v));
+    // Si el CUIT ya tiene certificado cargado en otro centro, el alta lo hereda (con su vencimiento).
+    $cert = q_one('SELECT certificado_crt, certificado_key, certificado_titular, certificado_desde, certificado_subido_at, venc_certificado
+                   FROM cuit WHERE cuit = ? AND certificado_crt IS NOT NULL ORDER BY certificado_subido_at DESC LIMIT 1', [$v['cuit']]);
+    $fila = $cert ? array_merge($v, $cert) : $v;
+    $cols = array_keys($fila);
+    q('INSERT INTO cuit (' . implode(',', $cols) . ') VALUES ' . in_list($cols), array_values($fila));
     $id = (int)db()->lastInsertId();
-    audit('cuit', 'crear', ['centro_id' => $v['centro_id'], 'entidad' => 'cuit', 'entidad_id' => $id, 'despues' => $v]);
-    return ['id' => $id];
+    audit('cuit', 'crear', ['centro_id' => $v['centro_id'], 'entidad' => 'cuit', 'entidad_id' => $id,
+        'despues' => $cert ? ['venc_certificado' => $cert['venc_certificado'], 'certificado_titular' => $cert['certificado_titular']] + $v : $v]);
+    return ['id' => $id, 'certificado_copiado' => (bool)$cert];
 });
 
 route('PUT', '/cuits/{id}', function ($p) {
@@ -204,16 +209,23 @@ route('POST', '/cuits/{id}/certificado', function ($p) {
     $titular = substr(trim((string)($subject['CN'] ?? $subject['O'] ?? '')), 0, 200) ?: null;
     $cuitCert = preg_replace('/\D/', '', (string)($subject['serialNumber'] ?? ''));
 
-    q('UPDATE cuit SET certificado_crt = ?, certificado_key = ?, certificado_titular = ?, certificado_desde = ?, venc_certificado = ?, certificado_subido_at = NOW() WHERE id = ?',
-        [$crtPem, encrypt_secret($keyLimpia), $titular, $desde, $hasta, $actual['id']]);
-    audit('cuit', 'certificado', ['centro_id' => (int)$actual['centro_id'], 'entidad' => 'cuit', 'entidad_id' => $actual['id'],
-        'antes' => ['venc_certificado' => $actual['venc_certificado'], 'certificado_titular' => $actual['certificado_titular']],
-        'despues' => ['venc_certificado' => $hasta, 'certificado_titular' => $titular, 'certificado_desde' => $desde]]);
+    // El certificado es del CUIT, no del centro: se aplica a todas las filas con ese número (activas o no).
+    $filas = q_all('SELECT id, centro_id, venc_certificado, certificado_titular FROM cuit WHERE cuit = ?', [$actual['cuit']]);
+    db()->beginTransaction();
+    q('UPDATE cuit SET certificado_crt = ?, certificado_key = ?, certificado_titular = ?, certificado_desde = ?, venc_certificado = ?, certificado_subido_at = NOW() WHERE cuit = ?',
+        [$crtPem, encrypt_secret($keyLimpia), $titular, $desde, $hasta, $actual['cuit']]);
+    foreach ($filas as $f) {
+        audit('cuit', 'certificado', ['centro_id' => (int)$f['centro_id'], 'entidad' => 'cuit', 'entidad_id' => (int)$f['id'],
+            'antes' => ['venc_certificado' => $f['venc_certificado'], 'certificado_titular' => $f['certificado_titular']],
+            'despues' => ['venc_certificado' => $hasta, 'certificado_titular' => $titular, 'certificado_desde' => $desde]
+                + ((int)$f['id'] !== (int)$actual['id'] ? ['motivo' => "Mismo CUIT que el registro {$actual['id']}"] : [])]);
+    }
+    db()->commit();
 
     $avisos = [];
     if ($cuitCert !== '' && $cuitCert !== $actual['cuit']) $avisos[] = "El certificado es del CUIT $cuitCert, no del CUIT $actual[cuit]. Solo sirve si ese CUIT tiene delegado el servicio de facturación.";
     if ($hasta < date('Y-m-d')) $avisos[] = 'El certificado ya está vencido.';
-    return ['ok' => true, 'titular' => $titular, 'desde' => $desde, 'hasta' => $hasta, 'avisos' => $avisos];
+    return ['ok' => true, 'titular' => $titular, 'desde' => $desde, 'hasta' => $hasta, 'avisos' => $avisos, 'registros' => count($filas)];
 });
 
 route('DELETE', '/cuits/{id}/certificado', function ($p) {
@@ -221,9 +233,14 @@ route('DELETE', '/cuits/{id}/certificado', function ($p) {
     $actual = q_one('SELECT * FROM cuit WHERE id = ?', [(int)$p['id']]);
     if (!$actual) throw new HttpError(404, 'El CUIT no existe.');
     require_centro($u, $actual['centro_id']);
-    if (empty($actual['certificado_crt'])) return ['ok' => true, 'sin_cambios' => true];
-    q('UPDATE cuit SET certificado_crt = NULL, certificado_key = NULL, certificado_titular = NULL, certificado_desde = NULL, certificado_subido_at = NULL WHERE id = ?', [$actual['id']]);
-    audit('cuit', 'quitar_certificado', ['centro_id' => (int)$actual['centro_id'], 'entidad' => 'cuit', 'entidad_id' => $actual['id'],
-        'antes' => ['certificado_titular' => $actual['certificado_titular'], 'venc_certificado' => $actual['venc_certificado']]]);
-    return ['ok' => true];
+    $filas = q_all('SELECT id, centro_id, venc_certificado, certificado_titular FROM cuit WHERE cuit = ? AND certificado_crt IS NOT NULL', [$actual['cuit']]);
+    if (!$filas) return ['ok' => true, 'sin_cambios' => true];
+    db()->beginTransaction();
+    q('UPDATE cuit SET certificado_crt = NULL, certificado_key = NULL, certificado_titular = NULL, certificado_desde = NULL, certificado_subido_at = NULL WHERE cuit = ?', [$actual['cuit']]);
+    foreach ($filas as $f) {
+        audit('cuit', 'quitar_certificado', ['centro_id' => (int)$f['centro_id'], 'entidad' => 'cuit', 'entidad_id' => (int)$f['id'],
+            'antes' => ['certificado_titular' => $f['certificado_titular'], 'venc_certificado' => $f['venc_certificado']]]);
+    }
+    db()->commit();
+    return ['ok' => true, 'registros' => count($filas)];
 });

@@ -75,7 +75,7 @@ export default function Cuit() {
       </section>
 
       {edit && <CuitForm inicial={edit} existentes={data ?? []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); done() }} />}
-      {cert && <CertificadoModal cuit={cert} onClose={() => setCert(null)} onSaved={() => { setCert(null); done() }} />}
+      {cert && <CertificadoModal cuit={cert} otros={(data ?? []).filter((o) => o.cuit === cert.cuit && o.id !== cert.id)} onClose={() => setCert(null)} onSaved={() => { setCert(null); done() }} />}
       {borrar && (
         <Confirm title="Dar de baja el CUIT" danger confirmLabel="Dar de baja" onClose={() => setBorrar(null)}
           onConfirm={async () => { if (await run(() => api.del(`/cuits/${borrar.id}`), (r) => r.desactivado ? 'El CUIT tiene comprobantes: quedó inactivo.' : 'CUIT eliminado.')) done() }}
@@ -120,7 +120,7 @@ function CuitForm({ inicial, existentes, onClose, onSaved }) {
     e.preventDefault()
     const payload = { ...v, cuit: String(v.cuit).replace(/\D/g, '') }
     const ok = await run(() => (nuevo ? api.post('/cuits', payload) : api.put(`/cuits/${v.id}`, payload)),
-      nuevo ? 'CUIT agregado.' : 'Cambios guardados.', fail)
+      (r) => (nuevo ? (r?.certificado_copiado ? 'CUIT agregado, con el certificado ARCA que ya tenía cargado.' : 'CUIT agregado.') : 'Cambios guardados.'), fail)
     if (ok) onSaved()
   }
 
@@ -205,7 +205,7 @@ const leerBase64 = (file) => new Promise((resolve, reject) => {
   r.readAsDataURL(file)
 })
 
-function CertificadoModal({ cuit, onClose, onSaved }) {
+function CertificadoModal({ cuit, otros, onClose, onSaved }) {
   const [crt, setCrt] = useState(null)
   const [key, setKey] = useState(null)
   const [claveKey, setClaveKey] = useState('')
@@ -213,6 +213,7 @@ function CertificadoModal({ cuit, onClose, onSaved }) {
   const [quitar, setQuitar] = useState(false)
   const [run, busy] = useAction()
   const actual = cuit.certificado
+  const enOtros = otros.length ? ` y en ${otros.length === 1 ? 'otro registro' : `otros ${otros.length} registros`} con el mismo CUIT (${otros.map((o) => o.centro_nombre || o.razon_social).join(', ')})` : ''
 
   const subir = async (e) => {
     e.preventDefault()
@@ -223,7 +224,10 @@ function CertificadoModal({ cuit, onClose, onSaved }) {
     if (Object.keys(errs).length) return
     const r = await run(async () => api.post(`/cuits/${cuit.id}/certificado`, {
       crt: await leerBase64(crt), key: await leerBase64(key), clave_key: claveKey || undefined,
-    }), (r) => r.avisos?.length ? `Certificado cargado. ${r.avisos.join(' ')}` : `Certificado cargado: vence el ${fmtDate(r.hasta)}.`,
+    }), (r) => {
+      const donde = r.registros > 1 ? ` en ${r.registros} registros con el mismo CUIT` : ''
+      return r.avisos?.length ? `Certificado cargado${donde}. ${r.avisos.join(' ')}` : `Certificado cargado${donde}: vence el ${fmtDate(r.hasta)}.`
+    },
     (err) => { if (err?.data?.campo) setErrors({ [err.data.campo]: err.message }) })
     if (r) onSaved()
   }
@@ -258,12 +262,14 @@ function CertificadoModal({ cuit, onClose, onSaved }) {
         <Field label="Contraseña de la clave privada" hint="Solo si la clave está protegida con contraseña." htmlFor="ce-clave">
           <input id="ce-clave" className="input" type="password" autoComplete="off" value={claveKey} onChange={(e) => setClaveKey(e.target.value)} />
         </Field>
-        <p className="small muted" style={{ margin: 0 }}>La clave privada se guarda cifrada y no se puede volver a descargar.</p>
+        <p className="small muted" style={{ margin: 0 }}>
+          Se guarda en este centro{enOtros}. La clave privada queda cifrada y no se puede volver a descargar.
+        </p>
       </form>
       {quitar && (
         <Confirm title="Quitar certificado" danger confirmLabel="Quitar" onClose={() => setQuitar(false)}
-          onConfirm={async () => { if (await run(() => api.del(`/cuits/${cuit.id}/certificado`), 'Certificado quitado.')) onSaved() }}
-          message="Se borran el .crt y la clave privada guardados para este CUIT. La fecha de vencimiento queda como estaba." />
+          onConfirm={async () => { if (await run(() => api.del(`/cuits/${cuit.id}/certificado`), (r) => r.registros > 1 ? `Certificado quitado de ${r.registros} registros.` : 'Certificado quitado.')) onSaved() }}
+          message={`Se borran el .crt y la clave privada guardados en este centro${enOtros}. La fecha de vencimiento queda como estaba.`} />
       )}
     </Modal>
   )
